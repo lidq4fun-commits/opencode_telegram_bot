@@ -299,7 +299,8 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - 若 npm 安装目录仍有 v10 无条件加密补丁，v11 在关闭模式下恢复 `.eot10-original` 备份；开启后应用检查 `OPENCODE_TELEGRAM_EOT10_ENABLED` 的开关补丁。
 - `--change-password` 兼容参数现在打开 v11 加密设置菜单。
 - npm 更新等待从 2 分钟延长到 5 分钟；若更新后 Bot 入口仍缺失，会再次尝试安装并验证，避免继续启动不完整的 Bot。
-- v11.0.1 修复加密模块路径诊断：优先读取 EXE 同目录源文件，否则读取 EXE 内嵌模块；Bot 入口缺失时会打印具体路径。
+- v11.0.1 修复加密模块路径诊断：加密模块改为内嵌，Bot 入口缺失时会打印具体路径。
+- v11.0.2 不再探测 EXE 同目录 sidecar，确保启动器复制到任意目录均不会因 `.mjs` 路径影响加密。`--verify-portable` 用于无副作用验证内嵌模块。
 - 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.exe`，143,872 bytes，SHA-256 `C88537870AE66D02A60A3005E2A4432C83B33C474B364363555F7673B1638CBB`（2026-09-26）。与 `EOT10Crypto.mjs`、图标文件放在同一目录运行。
 
 编译（Windows .NET Framework C# 编译器）：

@@ -160,9 +160,6 @@ class OpenCodeTelegramLauncher
 
     static string ReadEot10CryptoSource()
     {
-        string sidecarPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "EOT10Crypto.mjs");
-        if (File.Exists(sidecarPath)) return File.ReadAllText(sidecarPath, Encoding.UTF8);
-
         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
         foreach (string resourceName in assembly.GetManifestResourceNames())
         {
@@ -689,6 +686,19 @@ class OpenCodeTelegramLauncher
     static void Main(string[] args)
     {
         try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+        if (args != null && Array.Exists(args, arg => String.Equals(arg, "--verify-portable", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (String.IsNullOrEmpty(ReadEot10CryptoSource()))
+            {
+                Console.Error.WriteLine("Embedded EOT10 module is missing.");
+                Environment.ExitCode = 1;
+            }
+            else
+            {
+                Console.WriteLine("Embedded EOT10 module loaded independently of the EXE directory.");
+            }
+            return;
+        }
         singleInstanceMutex = new Mutex(true, "Local\\OpenCodeTelegramLauncher.SingleInstance", out ownsMutex);
         if (!ownsMutex)
         {

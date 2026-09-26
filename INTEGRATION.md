@@ -6,7 +6,7 @@ This guide connects the Windows OpenCode Telegram Bot launcher and the customize
 
 | Component | Directory | Entry point |
 |---|---|---|
-| Windows desktop Bot + launcher | `E:\opencode\encrypted_telegram_opencode_bot` | `OpenCodeTelegram-v11.exe` |
+| Windows desktop Bot + launcher | `E:\opencode\encrypted_telegram_opencode_bot` | `OpenCodeTelegram-v11.0.5.exe` |
 | Android Telegram client | `E:\opencode\Telegram-master` | `TMessagesProj_App` (`afatDebug`) |
 
 The Android-side handoff is [`../Telegram-master/EOT10-ANDROID.md`](../Telegram-master/EOT10-ANDROID.md). The general setup and service details are in [`OpenCode-Telegram-交接文档.md`](OpenCode-Telegram-交接文档.md).
@@ -30,13 +30,15 @@ The desktop launcher starts or reuses OpenCode on `127.0.0.1:4096`, starts the B
 - Desktop configuration is stored at `%APPDATA%\opencode-telegram-bot\eot11-settings.dpapi`, protected with Windows CurrentUser DPAPI. Passwords are not written to `.env`.
 - The Android client stores an independent password for each configured Bot using Android Keystore and no-backup app storage. Configure the corresponding private chat with the same password on desktop and phone.
 - The EOT10 wire format is `EOT10:` plus Base64URL JSON. It uses PBKDF2-HMAC-SHA256 (250,000 iterations) and AES-256-GCM. Each encrypted message has its own salt and nonce.
+- Rich Message replies preserve the Telegram rich block structure; visible text nodes use EOT10, while keyboard/button labels and the block schema remain readable. Rich text nodes in a single block share a random salt and use independent GCM nonces to avoid repeating PBKDF2 for every node.
+- `/open` and other Rich Message results remain structured Telegram rich messages instead of being flattened into an encrypted JSON text bubble; the Android client decrypts Rich Message text leaves before layout.
 - When encryption is enabled, only the authorized user's private conversation with the Bot is encrypted/decrypted. Other chats remain unchanged. Current support is text and keyboard labels; media payloads are not EOT10 protected.
 
 ## Versioning and builds
 
-Both folders are independent Git repositories. The desktop release source is `OpenCodeTelegramLauncher.cs`; `EOT10Crypto.mjs` is embedded into `OpenCodeTelegram-v11.exe` during compilation, so the runtime EXE can be copied and launched from any directory without sidecar files. Keep the `.mjs` beside the source when rebuilding. The launcher can retry npm installation if a timed-out update leaves the Bot entry missing.
+Both folders are independent Git repositories. The desktop release source is `OpenCodeTelegramLauncher.cs`; `EOT10Crypto.mjs` is embedded into `OpenCodeTelegram-v11.0.5.exe` during compilation, so the runtime EXE can be copied and launched from any directory without sidecar files. Keep the `.mjs` beside the source when rebuilding. The launcher can retry npm installation if a timed-out update leaves the Bot entry missing.
 
-`OpenCodeTelegram-v11.exe --verify-portable` checks the embedded module without starting services. Use `OpenCodeTelegram-v11.exe --skip-update` to restart the existing Bot with current saved encryption settings while skipping npm update checks. The EXE location is independent; the machine still needs the configured Windows-user npm/OpenCode installation and `%APPDATA%` Bot configuration.
+`OpenCodeTelegram-v11.0.5.exe --verify-portable` checks the embedded module without starting services. Use `OpenCodeTelegram-v11.0.5.exe --skip-update` to restart the existing Bot with current saved encryption settings while skipping npm update checks. The EXE location is independent; the machine still needs the configured Windows-user npm/OpenCode installation and `%APPDATA%` Bot configuration.
 
 Android debug build command:
 

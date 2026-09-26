@@ -4,9 +4,9 @@
 
 ## 推荐启动器
 
-双击：`OpenCodeTelegram-v11.exe`
+双击：`OpenCodeTelegram-v11.0.5.exe`
 
-v11 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目录运行，不依赖旁置脚本。`EOT10Crypto.mjs` 保留为协议源文件和重新编译输入。可运行 `OpenCodeTelegram-v11.exe --verify-portable` 单独验证内嵌模块，不启动服务。
+v11.0.5 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目录运行，不依赖旁置脚本。`EOT10Crypto.mjs` 保留为协议源文件和重新编译输入。可运行 `OpenCodeTelegram-v11.0.5.exe --verify-portable` 单独验证内嵌模块，不启动服务。
 
 启动器会按顺序：
 
@@ -23,6 +23,7 @@ v11 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目录运
 11. 启动后显示 10 秒加密设置入口；默认关闭 EOT10，超时自动按普通模式启动。此前保存的设置会自动加载；可在窗口启动时按 `E` 开启/关闭加密、添加/修改密码或删除密码。
 12. 每次启动 Bot 前先停止旧 daemon，确保它继承本次启动所加载的加密开关和密码；`--skip-update` 可在修复/重启时跳过 npm 检查。
 13. EOT10 开启时先解密再恢复 Telegram 命令 entity，使 `/status` 等命令正常分派；关闭时拒绝 EOT10 密文，避免密文被当作普通提示词处理。
+14. 发往手机的 Rich Message 保留 Telegram 富文本块结构，只加密可见文本字段；回复键盘和 Rich Message 按钮标签保持可见。
 
 窗口保持打开即可使用；关闭窗口会停止 Bot 和本次启动的 OpenCode Server。没有配置 Windows 登录自动启动。
 
@@ -91,7 +92,7 @@ v11 延续 v9 的默认自动启动、npm 更新检查、OpenCode Server 管理�
 4. 删除已保存密码并关闭 EOT10。
 0. 不更改并继续启动。
 
-配置保存在 `%APPDATA%\opencode-telegram-bot\eot11-settings.dpapi`，文件内容由当前 Windows 用户 DPAPI 加密；密码不会写入 `.env`。升级时若发现 v10 密码，会保留并迁移到 v11 配置，但加密保持关闭，需主动开启。运行 `OpenCodeTelegram-v11.exe --change-password` 可随时打开同一配置菜单。手机端与电脑端对应 Bot 私聊需使用相同密码。
+配置保存在 `%APPDATA%\opencode-telegram-bot\eot11-settings.dpapi`，文件内容由当前 Windows 用户 DPAPI 加密；密码不会写入 `.env`。升级时若发现 v10 密码，会保留并迁移到 v11 配置，但加密保持关闭，需主动开启。运行 `OpenCodeTelegram-v11.0.5.exe --change-password` 可随时打开同一配置菜单。手机端与电脑端对应 Bot 私聊需使用相同密码。
 
 如果当前安装目录内的 Bot 入口残留 v10 强制加密补丁，v11 在关闭加密时会尝试使用保存的原始备份恢复普通行为；启用加密时会应用可开关的 v11 EOT10 运行时补丁。
 

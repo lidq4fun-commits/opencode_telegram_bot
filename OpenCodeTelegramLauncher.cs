@@ -241,7 +241,8 @@ class OpenCodeTelegramLauncher
             if (content.IndexOf("EOT10 desktop transport", StringComparison.Ordinal) >= 0 &&
                 (content.IndexOf("EOT10 runtime environment status", StringComparison.Ordinal) < 0 ||
                  content.IndexOf("EOT10 command entity compatibility", StringComparison.Ordinal) < 0 ||
-                 content.IndexOf("EOT10 disabled-message guard", StringComparison.Ordinal) < 0))
+                 content.IndexOf("EOT10 disabled-message guard", StringComparison.Ordinal) < 0 ||
+                 content.IndexOf("EOT10 rich block encryption", StringComparison.Ordinal) < 0))
             {
                 string previousBackup = botIndex + ".eot10-original";
                 if (!File.Exists(previousBackup))
@@ -261,10 +262,20 @@ class OpenCodeTelegramLauncher
                     Console.WriteLine("[加密] 当前 Bot 版本缺少预期的 grammy 导入位置，无法安装 EOT10 适配。");
                     return false;
                 }
-                content = content.Replace(importPattern, importPattern + newline + "import { decryptEot10, encryptEot10, isEot10Message } from \"./eot10-crypto.mjs\";");
+                content = content.Replace(importPattern, importPattern + newline + "import { decryptEot10, encryptEot10, encryptEot10RichMessage, isEot10Message } from \"./eot10-crypto.mjs\";");
 
                 string apiAnchor = "            const runCall = async () => {\n                const response = await prev(method, payload, signal);";
                  string apiReplacement = "            // EOT10 desktop transport: enable only when explicitly configured at launcher startup.\n            const eot10Enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n            const targetBotChat = eot10Enabled && String(payload.chat_id ?? \"\") === String(config.telegram.allowedUserId);\n            const securedPayload = targetBotChat ? { ...payload } : payload;\n            let securedMethod = method;\n            const encryptMarkupText = value => Array.isArray(value) ? value.map(encryptMarkupText) : value && typeof value === \"object\" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === \"text\" && typeof item === \"string\" ? encryptEot10(item) : encryptMarkupText(item)])) : value;\n            if (targetBotChat && typeof securedPayload.text === \"string\") securedPayload.text = encryptEot10(securedPayload.text);\n            else if (targetBotChat && securedPayload.text && typeof securedPayload.text === \"object\") securedPayload.text = encryptEot10(JSON.stringify(securedPayload.text));\n            if (targetBotChat && typeof securedPayload.caption === \"string\") securedPayload.caption = encryptEot10(securedPayload.caption);\n            if (targetBotChat && securedPayload.reply_markup) securedPayload.reply_markup = encryptMarkupText(securedPayload.reply_markup);\n            if (targetBotChat && securedPayload.rich_message) {\n                securedPayload.text = encryptEot10(JSON.stringify(securedPayload.rich_message));\n                delete securedPayload.rich_message;\n                securedMethod = method === \"sendRichMessageDraft\" ? \"sendMessageDraft\" : \"sendMessage\";\n            }\n            const runCall = async () => {\n                const response = await prev(securedMethod, securedPayload, signal);";
+                apiReplacement = Regex.Replace(apiReplacement, @"            const encryptMarkupText = .*?\n", "");
+                apiReplacement = apiReplacement.Replace("            if (targetBotChat && securedPayload.reply_markup) securedPayload.reply_markup = encryptMarkupText(securedPayload.reply_markup);\n", "");
+                apiReplacement = apiReplacement.Replace("// EOT10 desktop transport: enable only when explicitly configured at launcher startup.", "// EOT10 desktop transport: enable only when explicitly configured at launcher startup.\n            // EOT10 rich block encryption: preserve layout structure and leave button labels readable.");
+                string oldRichRewrite = "            if (targetBotChat && securedPayload.rich_message) {\n                securedPayload.text = encryptEot10(JSON.stringify(securedPayload.rich_message));\n                delete securedPayload.rich_message;\n                securedMethod = method === \"sendRichMessageDraft\" ? \"sendMessageDraft\" : \"sendMessage\";\n            }";
+                apiReplacement = apiReplacement.Replace(oldRichRewrite, "            if (targetBotChat && securedPayload.rich_message) securedPayload.rich_message = encryptEot10RichMessage(securedPayload.rich_message);");
+                if (apiReplacement.IndexOf("encryptMarkupText", StringComparison.Ordinal) >= 0 || apiReplacement.IndexOf("JSON.stringify(securedPayload.rich_message)", StringComparison.Ordinal) >= 0)
+                {
+                    Console.WriteLine("[加密] 无法安装富文本/按钮兼容补丁。");
+                    return false;
+                }
                 if (content.Contains("\r\n")) { apiAnchor = apiAnchor.Replace("\n", "\r\n"); apiReplacement = apiReplacement.Replace("\n", "\r\n"); }
                  if (content.IndexOf(apiAnchor, StringComparison.Ordinal) < 0)
                  {

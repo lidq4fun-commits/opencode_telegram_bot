@@ -285,7 +285,7 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - EOT10 消息使用 `EOT10:` + Base64URL JSON；KDF 为 PBKDF2-HMAC-SHA256（250,000 次），加密为 AES-256-GCM。手机端和电脑端必须对同一个 Bot 使用相同密码。
 - 支持文本及 Telegram Rich Message；媒体文件本体尚未加密，目标 Bot 私聊中的媒体发送会被阻止。旧消息不会因修改密码而重加密，仍需旧密码。
 - 加密设置页现为跟随 Telegram 语言和主题切换的卡片式界面，包含 Bot 卡片和确认删除流程；文案提供英文、简体中文、繁体中文。
-- 最新一次构建成功并通过 `apksigner verify`；APK 大小 71,715,193 bytes，SHA-256 `9552A16CFFD75ED91CA058E9D8BA432CA04D753B1F2EE2CBC0C2120CBA40DA7E`，Telegram Saved Messages 消息 ID `17733`（2026-09-26）。Android Git 标签：`android-eot10-v11.0.5`。
+- 最新一次构建成功并通过 `apksigner verify`；APK 大小 77,509,613 bytes，SHA-256 `93439677E717E8B02F3A48DE58524AB458E79A683D863BEE7838F84E1773B3CE`，Telegram Saved Messages 消息 ID `17994`（2026-09-27）。Android Git 标签：`android-eot10-v11.0.5`。
 
 构建命令、源码文件列表、当前功能边界和 Keystore IV 说明详见 `EOT10-ANDROID.md`。这个 APK 是个人 debug 构建，不是官方 Telegram 发布版。
 

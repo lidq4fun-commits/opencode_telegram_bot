@@ -33,7 +33,7 @@ The desktop launcher starts or reuses OpenCode on `127.0.0.1:4096`, starts the B
 
 ## Versioning and builds
 
-Both folders are independent Git repositories. The desktop release source is `OpenCodeTelegramLauncher.cs`; `OpenCodeTelegram-v11.exe` must remain beside `EOT10Crypto.mjs`. Rebuild it with the compiler command in the main handoff document.
+Both folders are independent Git repositories. The desktop release source is `OpenCodeTelegramLauncher.cs`; `EOT10Crypto.mjs` is embedded into `OpenCodeTelegram-v11.exe` during compilation, so the runtime EXE can be copied independently. Keep the `.mjs` beside the source when rebuilding. The launcher can retry npm installation if a timed-out update leaves the Bot entry missing.
 
 Android debug build command:
 

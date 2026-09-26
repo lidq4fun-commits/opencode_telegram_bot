@@ -6,7 +6,7 @@
 
 双击：`OpenCodeTelegram-v11.exe`
 
-v11 可执行文件已构建；请与 `EOT10Crypto.mjs` 放在同一目录运行。
+v11 可执行文件已构建并内嵌 EOT10 加密模块；正常运行不依赖旁置脚本。`EOT10Crypto.mjs` 保留为协议源文件和重新编译输入。
 
 启动器会按顺序：
 

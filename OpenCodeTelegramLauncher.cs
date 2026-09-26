@@ -158,6 +158,48 @@ class OpenCodeTelegramLauncher
         return true;
     }
 
+    static string ReadEot10CryptoSource()
+    {
+        string sidecarPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "EOT10Crypto.mjs");
+        if (File.Exists(sidecarPath)) return File.ReadAllText(sidecarPath, Encoding.UTF8);
+
+        var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+        foreach (string resourceName in assembly.GetManifestResourceNames())
+        {
+            if (!resourceName.EndsWith("EOT10Crypto.mjs", StringComparison.OrdinalIgnoreCase)) continue;
+            using (Stream stream = assembly.GetManifestResourceStream(resourceName))
+            {
+                if (stream == null) continue;
+                using (var reader = new StreamReader(stream, Encoding.UTF8)) return reader.ReadToEnd();
+            }
+        }
+        return null;
+    }
+
+    static string InstalledBotEntryPath(string appData)
+    {
+        return Path.Combine(appData, "npm", "node_modules", "@grinev", "opencode-telegram-bot", "dist", "bot", "index.js");
+    }
+
+    static bool EnsureInstalledBotEntryAvailable(string appData)
+    {
+        string botIndex = InstalledBotEntryPath(appData);
+        if (File.Exists(botIndex)) return true;
+
+        Console.WriteLine("[修复] npm 更新后没有找到 Bot 入口文件，尝试重新安装当前 latest 版本...");
+        int exitCode;
+        string error;
+        RunNpm("install --loglevel=error --global @grinev/opencode-telegram-bot@latest", 300000, out exitCode, out error);
+        if (File.Exists(botIndex))
+        {
+            Console.WriteLine("[修复] Bot 入口已恢复。");
+            return true;
+        }
+        Console.WriteLine("[修复] Bot 入口仍不存在：" + botIndex);
+        if (!String.IsNullOrWhiteSpace(error)) Console.WriteLine("npm 错误：" + error.Trim());
+        return false;
+    }
+
     static bool EnsureEot10Encryption(string appData)
     {
         try
@@ -168,15 +210,19 @@ class OpenCodeTelegramLauncher
                 return false;
             }
             string dist = Path.Combine(appData, "npm", "node_modules", "@grinev", "opencode-telegram-bot", "dist", "bot");
-            string sourceCrypto = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "EOT10Crypto.mjs");
+            string botIndex = InstalledBotEntryPath(appData);
+            string cryptoText = ReadEot10CryptoSource();
             string targetCrypto = Path.Combine(dist, "eot10-crypto.mjs");
-            string botIndex = Path.Combine(dist, "index.js");
-            if (!File.Exists(sourceCrypto) || !File.Exists(botIndex))
+            if (String.IsNullOrEmpty(cryptoText))
             {
-                Console.WriteLine("[加密] 找不到 EOT10 加密模块或 Bot 入口；加密模式未启用。");
+                Console.WriteLine("[加密] 找不到 EOT10Crypto.mjs：既未随启动器提供，也未内嵌于 EXE。");
                 return false;
             }
-            string cryptoText = File.ReadAllText(sourceCrypto, Encoding.UTF8);
+            if (!File.Exists(botIndex))
+            {
+                Console.WriteLine("[加密] 找不到 Bot 入口文件：" + botIndex);
+                return false;
+            }
             if (!File.Exists(targetCrypto) || File.ReadAllText(targetCrypto, Encoding.UTF8) != cryptoText)
                 File.WriteAllText(targetCrypto, cryptoText, new UTF8Encoding(false));
 
@@ -198,19 +244,31 @@ class OpenCodeTelegramLauncher
             if (content.IndexOf("EOT10 desktop transport", StringComparison.Ordinal) < 0)
             {
                 string importPattern = "import { Bot } from \"grammy\";";
-                if (content.IndexOf(importPattern, StringComparison.Ordinal) < 0) return false;
+                if (content.IndexOf(importPattern, StringComparison.Ordinal) < 0)
+                {
+                    Console.WriteLine("[加密] 当前 Bot 版本缺少预期的 grammy 导入位置，无法安装 EOT10 适配。");
+                    return false;
+                }
                 content = content.Replace(importPattern, importPattern + newline + "import { decryptEot10, encryptEot10, isEot10Message } from \"./eot10-crypto.mjs\";");
 
                 string apiAnchor = "            const runCall = async () => {\n                const response = await prev(method, payload, signal);";
                  string apiReplacement = "            // EOT10 desktop transport: enable only when explicitly configured at launcher startup.\n            const eot10Enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n            const targetBotChat = eot10Enabled && String(payload.chat_id ?? \"\") === String(config.telegram.allowedUserId);\n            const securedPayload = targetBotChat ? { ...payload } : payload;\n            let securedMethod = method;\n            const encryptMarkupText = value => Array.isArray(value) ? value.map(encryptMarkupText) : value && typeof value === \"object\" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === \"text\" && typeof item === \"string\" ? encryptEot10(item) : encryptMarkupText(item)])) : value;\n            if (targetBotChat && typeof securedPayload.text === \"string\") securedPayload.text = encryptEot10(securedPayload.text);\n            else if (targetBotChat && securedPayload.text && typeof securedPayload.text === \"object\") securedPayload.text = encryptEot10(JSON.stringify(securedPayload.text));\n            if (targetBotChat && typeof securedPayload.caption === \"string\") securedPayload.caption = encryptEot10(securedPayload.caption);\n            if (targetBotChat && securedPayload.reply_markup) securedPayload.reply_markup = encryptMarkupText(securedPayload.reply_markup);\n            if (targetBotChat && securedPayload.rich_message) {\n                securedPayload.text = encryptEot10(JSON.stringify(securedPayload.rich_message));\n                delete securedPayload.rich_message;\n                securedMethod = method === \"sendRichMessageDraft\" ? \"sendMessageDraft\" : \"sendMessage\";\n            }\n            const runCall = async () => {\n                const response = await prev(securedMethod, securedPayload, signal);";
                 if (content.Contains("\r\n")) { apiAnchor = apiAnchor.Replace("\n", "\r\n"); apiReplacement = apiReplacement.Replace("\n", "\r\n"); }
-                if (content.IndexOf(apiAnchor, StringComparison.Ordinal) < 0) return false;
+                 if (content.IndexOf(apiAnchor, StringComparison.Ordinal) < 0)
+                 {
+                     Console.WriteLine("[加密] 当前 Bot 版本的 Telegram API 调用结构已变化，未能定位加密插入点。");
+                     return false;
+                 }
                 content = content.Replace(apiAnchor, apiReplacement);
 
                 string middlewareAnchor = "    bot.use(authMiddleware);";
                  string middlewareReplacement = "    // EOT10 applies only to the authorized user's private conversation when explicitly enabled.\n    bot.use(async (ctx, next) => {\n        const eot10Enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n        if (!eot10Enabled) { await next(); return; }\n        const message = ctx.message;\n        const authorizedSender = String(ctx.from?.id ?? \"\") === String(config.telegram.allowedUserId);\n        const targetBotPrivateChat = authorizedSender && ctx.chat?.type === \"private\" &&\n            String(ctx.chat.id) === String(config.telegram.allowedUserId);\n        if (authorizedSender && !targetBotPrivateChat) return;\n        if (!targetBotPrivateChat) { await next(); return; }\n        if (message && typeof message.text !== \"string\") {\n            await ctx.reply(\"v11 当前仅支持加密文本；媒体消息已拒绝。\");\n            return;\n        }\n        if (typeof message?.text === \"string\") {\n            if (!isEot10Message(message.text)) {\n                await ctx.reply(\"v11 加密模式已启用。请使用配套手机端发送 EOT10 加密消息。\");\n                return;\n            }\n            try { message.text = decryptEot10(message.text); }\n            catch (error) { logger.warn(\"[EOT10] Rejected invalid encrypted message\", error); await ctx.reply(\"加密消息无法验证或解密，请检查密码和消息完整性。\"); return; }\n        }\n        await next();\n    });\n    bot.use(authMiddleware);";
                 if (content.Contains("\r\n")) { middlewareAnchor = middlewareAnchor.Replace("\n", "\r\n"); middlewareReplacement = middlewareReplacement.Replace("\n", "\r\n"); }
-                if (content.IndexOf(middlewareAnchor, StringComparison.Ordinal) < 0) return false;
+                 if (content.IndexOf(middlewareAnchor, StringComparison.Ordinal) < 0)
+                 {
+                     Console.WriteLine("[加密] 当前 Bot 版本的中间件结构已变化，未能定位解密插入点。");
+                     return false;
+                 }
                 content = content.Replace(middlewareAnchor, middlewareReplacement);
 
                 string backup = botIndex + ".eot10-original";
@@ -234,7 +292,7 @@ class OpenCodeTelegramLauncher
         Environment.SetEnvironmentVariable("OPENCODE_TELEGRAM_EOT10_PASSWORD", null, EnvironmentVariableTarget.Process);
         try
         {
-            string botIndex = Path.Combine(appData, "npm", "node_modules", "@grinev", "opencode-telegram-bot", "dist", "bot", "index.js");
+            string botIndex = InstalledBotEntryPath(appData);
             if (File.Exists(botIndex))
             {
                 string content = File.ReadAllText(botIndex, Encoding.UTF8);
@@ -606,7 +664,7 @@ class OpenCodeTelegramLauncher
             StopExistingBotForUpdate(botCmd);
             Console.WriteLine("[2/5] 正在更新程序，请稍候...");
             int updateCode; string updateError;
-            RunNpm("install --loglevel=error --global @grinev/opencode-telegram-bot@latest", 120000, out updateCode, out updateError);
+            RunNpm("install --loglevel=error --global @grinev/opencode-telegram-bot@latest", 300000, out updateCode, out updateError);
             if (updateCode == -2) Console.WriteLine("[3/5] 更新超时，启用当前已安装版本并继续启动。");
             else if (updateCode == 0) Console.WriteLine("[3/5] 更新完成，准备启动最新版本。");
             else { Console.WriteLine("[3/5] 更新失败（退出码 " + updateCode + "），启用当前已安装版本。"); if (!String.IsNullOrWhiteSpace(updateError)) Console.WriteLine("npm 错误：" + updateError.Trim()); }
@@ -662,6 +720,7 @@ class OpenCodeTelegramLauncher
         if (stopping) return;
         ApplyEot11RuntimeSettings();
         TryUpdateBot(botCmd);
+        if (!EnsureInstalledBotEntryAvailable(appData)) { Console.ReadKey(); return; }
         Console.WriteLine("[4/7] 正在应用 EOT10 收发设置...");
         bool eotReady = eot10Enabled ? EnsureEot10Encryption(appData) : EnsureEot10Disabled(appData);
         if (!eotReady) { Console.ReadKey(); return; }

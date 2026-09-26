@@ -291,17 +291,19 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 
 ## 电脑端 v11 启动器
 
-当前开发的 v11 启动器源文件为 `OpenCodeTelegramLauncher.cs`，构建产物为 `OpenCodeTelegram-v11.exe`，EOT10 模块 `EOT10Crypto.mjs` 需与 EXE 放在同一目录。v11 保留 v9 默认服务生命周期：npm 版本检查/更新、启动或复用 `127.0.0.1:4096` 上的 OpenCode、启动 Bot、网络恢复监控；退出窗口停止本次 Bot/OpenCode 服务。
+当前开发的 v11 启动器源文件为 `OpenCodeTelegramLauncher.cs`，构建产物为 `OpenCodeTelegram-v11.exe`。编译时将 `EOT10Crypto.mjs` 嵌入 EXE，运行时不要求旁边另放脚本。v11 保留 v9 默认服务生命周期：npm 版本检查/更新、启动或复用 `127.0.0.1:4096` 上的 OpenCode、启动 Bot、网络恢复监控；退出窗口停止本次 Bot/OpenCode 服务。
 
 - EOT10 **默认关闭**。启动时显示 10 秒倒计时；按 `E` 打开设置菜单，超时则直接继续启动。若已保存 v11 配置，超时自动加载保存值；首次无配置时是普通明文 Bot 模式。
 - 菜单支持：用已保存密码开启；添加/修改密码并开启；关闭但保留密码；删除密码并关闭；不更改继续启动。
 - 配置文件 `%APPDATA%\opencode-telegram-bot\eot11-settings.dpapi` 由 Windows 当前用户 DPAPI 加密。旧 v10 密码可迁移为“已保存但关闭”，升级不会擅自开启加密。
 - 若 npm 安装目录仍有 v10 无条件加密补丁，v11 在关闭模式下恢复 `.eot10-original` 备份；开启后应用检查 `OPENCODE_TELEGRAM_EOT10_ENABLED` 的开关补丁。
 - `--change-password` 兼容参数现在打开 v11 加密设置菜单。
+- npm 更新等待从 2 分钟延长到 5 分钟；若更新后 Bot 入口仍缺失，会再次尝试安装并验证，避免继续启动不完整的 Bot。
+- v11.0.1 修复加密模块路径诊断：优先读取 EXE 同目录源文件，否则读取 EXE 内嵌模块；Bot 入口缺失时会打印具体路径。
 - 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.exe`，143,872 bytes，SHA-256 `C88537870AE66D02A60A3005E2A4432C83B33C474B364363555F7673B1638CBB`（2026-09-26）。与 `EOT10Crypto.mjs`、图标文件放在同一目录运行。
 
 编译（Windows .NET Framework C# 编译器）：
 
 ```powershell
-& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo /target:exe /optimize+ /out:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegram-v11.exe' /win32icon:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.ico' /reference:System.dll /reference:System.Core.dll /reference:System.Security.dll 'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.cs'
+& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo /target:exe /optimize+ /out:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegram-v11.exe' /win32icon:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.ico' /resource:'E:\opencode\encrypted_telegram_opencode_bot\EOT10Crypto.mjs',EOT10Crypto.mjs /reference:System.dll /reference:System.Core.dll /reference:System.Security.dll 'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.cs'
 ```

@@ -303,7 +303,7 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - v11.0.2 不再探测 EXE 同目录 sidecar，确保启动器复制到任意目录均不会因 `.mjs` 路径影响加密。`--verify-portable` 用于无副作用验证内嵌模块。
 - v11.0.4 每次启动 Bot 前先停止旧 daemon，再按当前 DPAPI 配置重建，保证 EOT10 环境变量进入服务进程；`--skip-update` 可跳过 npm 更新检查。解密后重建 Telegram `bot_command` entity，使 `/status` 等命令进入 grammY 命令路由；加密关闭时拒绝 EOT10 密文，避免误送入 OpenCode。
 - v11.0.5 保留 `sendRichMessage` 结构并仅加密文本节点；Bot reply-markup 和 Rich Message 按钮标签保持可读。Android 解密 Rich Message 节点后使用原生富消息布局显示，并将旧版已加密 JSON 内容转换为可读文本。Android 发送 KDF 移到后台并预热盐/密钥；消息历史解密使用进程内缓存。
-- 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.0.5.exe`，156,160 bytes，SHA-256 `C7DC69C6FED10E9CFBB49130F1FB2A160E6F92B503CC0B7E66B076A84A0D611E`（2026-09-26）。EOT10 模块内嵌；可从任意目录运行。
+- 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.0.5.exe`，156,160 bytes，SHA-256 `C7DC69C6FED10E9CFBB49130F1FB2A160E6F92B503CC0B7E66B076A84A0D611E`（2026-09-26）。EOT10 模块内嵌；可从任意目录运行。最新版 EXE 已送入 Saved Messages，消息 ID `18021`。
 
 编译（Windows .NET Framework C# 编译器）：
 

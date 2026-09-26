@@ -238,6 +238,21 @@ class OpenCodeTelegramLauncher
                 content = File.ReadAllText(botIndex, Encoding.UTF8);
                 newline = content.Contains("\r\n") ? "\r\n" : "\n";
             }
+            if (content.IndexOf("EOT10 desktop transport", StringComparison.Ordinal) >= 0 &&
+                (content.IndexOf("EOT10 runtime environment status", StringComparison.Ordinal) < 0 ||
+                 content.IndexOf("EOT10 command entity compatibility", StringComparison.Ordinal) < 0 ||
+                 content.IndexOf("EOT10 disabled-message guard", StringComparison.Ordinal) < 0))
+            {
+                string previousBackup = botIndex + ".eot10-original";
+                if (!File.Exists(previousBackup))
+                {
+                    Console.WriteLine("[加密] 当前 EOT10 补丁缺少原始备份，无法安全刷新运行状态诊断。");
+                    return false;
+                }
+                File.Copy(previousBackup, botIndex, true);
+                content = File.ReadAllText(botIndex, Encoding.UTF8);
+                newline = content.Contains("\r\n") ? "\r\n" : "\n";
+            }
             if (content.IndexOf("EOT10 desktop transport", StringComparison.Ordinal) < 0)
             {
                 string importPattern = "import { Bot } from \"grammy\";";
@@ -259,7 +274,26 @@ class OpenCodeTelegramLauncher
                 content = content.Replace(apiAnchor, apiReplacement);
 
                 string middlewareAnchor = "    bot.use(authMiddleware);";
-                 string middlewareReplacement = "    // EOT10 applies only to the authorized user's private conversation when explicitly enabled.\n    bot.use(async (ctx, next) => {\n        const eot10Enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n        if (!eot10Enabled) { await next(); return; }\n        const message = ctx.message;\n        const authorizedSender = String(ctx.from?.id ?? \"\") === String(config.telegram.allowedUserId);\n        const targetBotPrivateChat = authorizedSender && ctx.chat?.type === \"private\" &&\n            String(ctx.chat.id) === String(config.telegram.allowedUserId);\n        if (authorizedSender && !targetBotPrivateChat) return;\n        if (!targetBotPrivateChat) { await next(); return; }\n        if (message && typeof message.text !== \"string\") {\n            await ctx.reply(\"v11 当前仅支持加密文本；媒体消息已拒绝。\");\n            return;\n        }\n        if (typeof message?.text === \"string\") {\n            if (!isEot10Message(message.text)) {\n                await ctx.reply(\"v11 加密模式已启用。请使用配套手机端发送 EOT10 加密消息。\");\n                return;\n            }\n            try { message.text = decryptEot10(message.text); }\n            catch (error) { logger.warn(\"[EOT10] Rejected invalid encrypted message\", error); await ctx.reply(\"加密消息无法验证或解密，请检查密码和消息完整性。\"); return; }\n        }\n        await next();\n    });\n    bot.use(authMiddleware);";
+                  string middlewareReplacement = "    // EOT10 applies only to the authorized user's private conversation when explicitly enabled.\n    const eot10Enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n    logger.info(`[EOT10 runtime environment status] desktop transport ${eot10Enabled ? \"enabled\" : \"disabled\"}`);\n    bot.use(async (ctx, next) => {\n        if (!eot10Enabled) { await next(); return; }\n        const message = ctx.message;\n        const authorizedSender = String(ctx.from?.id ?? \"\") === String(config.telegram.allowedUserId);\n        const targetBotPrivateChat = authorizedSender && ctx.chat?.type === \"private\" &&\n            String(ctx.chat.id) === String(config.telegram.allowedUserId);\n        if (authorizedSender && !targetBotPrivateChat) return;\n        if (!targetBotPrivateChat) { await next(); return; }\n        if (message && typeof message.text !== \"string\") {\n            await ctx.reply(\"v11 当前仅支持加密文本；媒体消息已拒绝。\");\n            return;\n        }\n        if (typeof message?.text === \"string\") {\n            if (!isEot10Message(message.text)) {\n                await ctx.reply(\"v11 加密模式已启用。请使用配套手机端发送 EOT10 加密消息。\");\n                return;\n            }\n            try { message.text = decryptEot10(message.text); }\n            catch (error) { logger.warn(\"[EOT10] Rejected invalid encrypted message\", error); await ctx.reply(\"加密消息无法验证或解密，请检查密码和消息完整性。\"); return; }\n        }\n        await next();\n    });\n    bot.use(authMiddleware);";
+                string commandEntityMiddleware =
+                    "    // EOT10 command entity compatibility: rebuild slash-command metadata after decryption.\n" +
+                    "    bot.use((ctx, next) => {\n" +
+                    "        const message = ctx.message;\n" +
+                    "        const match = typeof message?.text === \"string\" ? message.text.match(/^\\/[A-Za-z0-9_]+(?:@[A-Za-z0-9_]+)?(?=\\s|$)/) : null;\n" +
+                    "        if (match) message.entities = [{ type: \"bot_command\", offset: 0, length: match[0].length }];\n" +
+                    "        return next();\n" +
+                    "    });\n";
+                middlewareReplacement = middlewareReplacement.Replace("    bot.use(authMiddleware);", commandEntityMiddleware + "    bot.use(authMiddleware);");
+                string disabledCiphertextGuard =
+                    "    // EOT10 disabled-message guard: never pass encrypted input to OpenCode as plain text.\n" +
+                    "    bot.use(async (ctx, next) => {\n" +
+                    "        const enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n" +
+                    "        const authorized = String(ctx.from?.id ?? \"\") === String(config.telegram.allowedUserId);\n" +
+                    "        const target = authorized && ctx.chat?.type === \"private\" && String(ctx.chat.id) === String(config.telegram.allowedUserId);\n" +
+                    "        if (!enabled && target && isEot10Message(ctx.message?.text)) { await ctx.reply(\"桌面端 EOT10 已关闭，请在启动器开启加密后重试，或发送普通文本。\"); return; }\n" +
+                    "        await next();\n" +
+                    "    });\n";
+                middlewareReplacement = middlewareReplacement.Replace("    // EOT10 applies only to the authorized user's private conversation when explicitly enabled.", disabledCiphertextGuard + "    // EOT10 applies only to the authorized user's private conversation when explicitly enabled.");
                 if (content.Contains("\r\n")) { middlewareAnchor = middlewareAnchor.Replace("\n", "\r\n"); middlewareReplacement = middlewareReplacement.Replace("\n", "\r\n"); }
                  if (content.IndexOf(middlewareAnchor, StringComparison.Ordinal) < 0)
                  {
@@ -729,7 +763,9 @@ class OpenCodeTelegramLauncher
         ConfigureEot11AtStartup(appData);
         if (stopping) return;
         ApplyEot11RuntimeSettings();
-        TryUpdateBot(botCmd);
+        bool skipUpdate = args != null && Array.Exists(args, arg => String.Equals(arg, "--skip-update", StringComparison.OrdinalIgnoreCase));
+        if (skipUpdate) Console.WriteLine("[更新] 已按参数跳过 npm 更新，使用当前已安装版本。");
+        else TryUpdateBot(botCmd);
         if (!EnsureInstalledBotEntryAvailable(appData)) { Console.ReadKey(); return; }
         Console.WriteLine("[4/7] 正在应用 EOT10 收发设置...");
         bool eotReady = eot10Enabled ? EnsureEot10Encryption(appData) : EnsureEot10Disabled(appData);
@@ -737,6 +773,8 @@ class OpenCodeTelegramLauncher
         Console.WriteLine("[加密] 当前运行模式：" + (eot10Enabled ? "EOT10 已开启" : "普通模式（不加密）"));
         Console.WriteLine("[5/7] 正在检查新会话交互修复...");
         EnsureNewSessionClearsStaleQuestion(appData);
+        Console.WriteLine("[Bot] 正在停止旧 daemon，以便新进程加载当前 EOT10 配置...");
+        StopExistingBotForUpdate(botCmd);
         Console.WriteLine("[6/7] 正在检查 OpenCode Server...");
         string serverExe = Path.Combine(appData, "npm", "node_modules", "opencode-ai", "bin", "opencode.exe");
         if (!File.Exists(serverExe)) { Console.WriteLine("找不到 OpenCode：" + serverExe); Console.ReadKey(); return; }

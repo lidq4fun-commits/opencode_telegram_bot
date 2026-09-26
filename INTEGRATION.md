@@ -26,6 +26,7 @@ The desktop launcher starts or reuses OpenCode on `127.0.0.1:4096`, starts the B
 
 - The v11 desktop launcher defaults to **encryption off**. During the first 10 seconds press `E` to open the encryption menu; otherwise startup proceeds normally. Existing v11 settings are loaded automatically after the prompt times out.
 - The menu can enable with a saved password, add/change a password and enable, disable while keeping the password, or delete the saved password and disable.
+- When EOT10 is enabled, the desktop decrypts before routing and rebuilds Telegram `bot_command` metadata so commands such as `/status` reach their handlers. When disabled, EOT10 envelopes are rejected rather than routed as ordinary OpenCode prompts.
 - Desktop configuration is stored at `%APPDATA%\opencode-telegram-bot\eot11-settings.dpapi`, protected with Windows CurrentUser DPAPI. Passwords are not written to `.env`.
 - The Android client stores an independent password for each configured Bot using Android Keystore and no-backup app storage. Configure the corresponding private chat with the same password on desktop and phone.
 - The EOT10 wire format is `EOT10:` plus Base64URL JSON. It uses PBKDF2-HMAC-SHA256 (250,000 iterations) and AES-256-GCM. Each encrypted message has its own salt and nonce.
@@ -35,7 +36,7 @@ The desktop launcher starts or reuses OpenCode on `127.0.0.1:4096`, starts the B
 
 Both folders are independent Git repositories. The desktop release source is `OpenCodeTelegramLauncher.cs`; `EOT10Crypto.mjs` is embedded into `OpenCodeTelegram-v11.exe` during compilation, so the runtime EXE can be copied and launched from any directory without sidecar files. Keep the `.mjs` beside the source when rebuilding. The launcher can retry npm installation if a timed-out update leaves the Bot entry missing.
 
-`OpenCodeTelegram-v11.exe --verify-portable` checks the embedded module without starting services and is used to verify copied builds. The EXE location is independent; the machine still needs the configured Windows-user npm/OpenCode installation and `%APPDATA%` Bot configuration.
+`OpenCodeTelegram-v11.exe --verify-portable` checks the embedded module without starting services. Use `OpenCodeTelegram-v11.exe --skip-update` to restart the existing Bot with current saved encryption settings while skipping npm update checks. The EXE location is independent; the machine still needs the configured Windows-user npm/OpenCode installation and `%APPDATA%` Bot configuration.
 
 Android debug build command:
 

@@ -301,9 +301,8 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - npm 更新等待从 2 分钟延长到 5 分钟；若更新后 Bot 入口仍缺失，会再次尝试安装并验证，避免继续启动不完整的 Bot。
 - v11.0.1 修复加密模块路径诊断：加密模块改为内嵌，Bot 入口缺失时会打印具体路径。
 - v11.0.2 不再探测 EXE 同目录 sidecar，确保启动器复制到任意目录均不会因 `.mjs` 路径影响加密。`--verify-portable` 用于无副作用验证内嵌模块。
-- v11.0.3 每次启动 Bot 前先停止旧 daemon，再由当前启动器重新创建，以确保 DPAPI 配置中的 EOT10 开关/密码进入运行进程；`--skip-update` 可跳过 npm 更新检查，用于快速应用本地保存设置。
-- v11.0.4 在桌面端解密后重建 Telegram `bot_command` entity，否则 grammY 无法把 `/status` 等命令分派到命令路由；加密关闭时明确拒绝 EOT10 密文，避免将密文当作普通 OpenCode 提示词。
-- 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.exe`，143,872 bytes，SHA-256 `C88537870AE66D02A60A3005E2A4432C83B33C474B364363555F7673B1638CBB`（2026-09-26）。与 `EOT10Crypto.mjs`、图标文件放在同一目录运行。
+- v11.0.4 每次启动 Bot 前先停止旧 daemon，再按当前 DPAPI 配置重建，保证 EOT10 环境变量进入服务进程；`--skip-update` 可跳过 npm 更新检查。解密后重建 Telegram `bot_command` entity，使 `/status` 等命令进入 grammY 命令路由；加密关闭时拒绝 EOT10 密文，避免误送入 OpenCode。
+- 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.exe`，152,064 bytes，SHA-256 `A506628A9C0EB64E780F2E2BC1A86FAB27D83229075B1637042313B4DD0F158A`（2026-09-26）。EOT10 模块内嵌；可从任意目录运行。
 
 编译（Windows .NET Framework C# 编译器）：
 

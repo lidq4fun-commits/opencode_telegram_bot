@@ -3,11 +3,25 @@ import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:
 const PREFIX = "EOT10:";
 const PASSWORD_ENV = "OPENCODE_TELEGRAM_EOT10_PASSWORD";
 const PBKDF2_ITERATIONS = 250000;
+// One fresh session salt per Bot process lets both endpoints reuse the PBKDF2
+// result across messages; every envelope still gets its own AES-GCM nonce.
+const SESSION_SALT = randomBytes(16);
+const derivedKeys = new Map();
 
 function deriveKey(salt) {
+  const keyId = salt.toString("base64url");
+  const cached = derivedKeys.get(keyId);
+  if (cached) return cached;
   const password = process.env[PASSWORD_ENV];
   if (!password || password.length < 12) throw new Error(`${PASSWORD_ENV} must contain a password of at least 12 characters`);
-  return pbkdf2Sync(password.normalize("NFKC"), salt, PBKDF2_ITERATIONS, 32, "sha256");
+  const key = pbkdf2Sync(password.normalize("NFKC"), salt, PBKDF2_ITERATIONS, 32, "sha256");
+  derivedKeys.set(keyId, key);
+  while (derivedKeys.size > 128) {
+    const oldestKeyId = derivedKeys.keys().next().value;
+    derivedKeys.get(oldestKeyId)?.fill(0);
+    derivedKeys.delete(oldestKeyId);
+  }
+  return key;
 }
 
 function encryptEot10WithKey(plaintext, salt, key) {
@@ -28,13 +42,9 @@ function encryptEot10WithKey(plaintext, salt, key) {
 }
 
 export function encryptEot10(plaintext) {
-  const salt = randomBytes(16);
+  const salt = SESSION_SALT;
   const key = deriveKey(salt);
-  try {
-    return encryptEot10WithKey(plaintext, salt, key);
-  } finally {
-    key.fill(0);
-  }
+  return encryptEot10WithKey(plaintext, salt, key);
 }
 
 const richTextKeys = new Set(["text", "caption", "credit", "summary", "title", "expression"]);
@@ -61,16 +71,12 @@ function encryptRichValue(value, key, salt, derivedKey) {
   ]));
 }
 
-// Rich messages keep their block structure and visible buttons; one salt is shared
-// across text leaves so clients only need one PBKDF2 derivation per rich message.
+// Rich messages keep their block structure and visible buttons; the Bot-process
+// salt is shared across text leaves so clients derive the session key only once.
 export function encryptEot10RichMessage(richMessage) {
-  const salt = randomBytes(16);
+  const salt = SESSION_SALT;
   const key = deriveKey(salt);
-  try {
-    return encryptRichValue(richMessage, null, salt, key);
-  } finally {
-    key.fill(0);
-  }
+  return encryptRichValue(richMessage, null, salt, key);
 }
 
 export function decryptEot10(value) {

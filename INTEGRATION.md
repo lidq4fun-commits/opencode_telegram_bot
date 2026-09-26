@@ -34,6 +34,21 @@ The desktop launcher starts or reuses OpenCode on `127.0.0.1:4096`, starts the B
 - `/open` and other Rich Message results remain structured Telegram rich messages instead of being flattened into an encrypted JSON text bubble; the Android client decrypts Rich Message text leaves before layout.
 - When encryption is enabled, only the authorized user's private conversation with the Bot is encrypted/decrypted. Other chats remain unchanged. Current support is text and keyboard labels; media payloads are not EOT10 protected.
 
+## Bot developer checklist
+
+Keep these rules when changing the Bot or updating its npm package; the launcher reapplies its compatibility patch to the installed package:
+
+1. **Inbound order:** EOT10 middleware must run before command routing. In the authorized private Bot chat, reject non-EOT text, decrypt the envelope, then reconstruct the `bot_command` entity for decrypted `/status`-style commands before grammY sees the update. GrammY does not dispatch commands from text alone.
+2. **Scope:** only encrypt/decrypt when the feature flag is on, the sender is the configured user, and the chat is that user's private conversation with this Bot. When off, pass ordinary messages unchanged but reject an EOT10 envelope rather than feeding cipher text to OpenCode.
+3. **Normal sends:** encrypt the `text` (and supported `caption`) fields to the target private chat. Do not recursively encrypt `reply_markup`; button labels and callback structure must remain unchanged.
+4. **Rich Message sends:** keep `sendRichMessage`/`sendRichMessageDraft` and the `rich_message` block structure. Encrypt only Rich Text leaves, preserving block types and layout fields. `encryptEot10RichMessage` is the reference implementation: it skips button/button-row objects, uses one salt per Rich Message plus a distinct GCM nonce for each encrypted text leaf, and avoids flattening Rich Message output into an unrenderable EOT10 JSON text bubble.
+5. **Android rendering:** do not put ciphertext into Bot button labels. The client decrypts Rich Message TL text nodes on a copy before native layout; legacy flattened EOT10 JSON has a plain-text display fallback.
+6. **Pairing:** configure the peer's actual public Bot username and the matching Bot-specific passphrase on both endpoints.
+7. **Updates/restarts:** use one launcher version at a time. v9 and v11 compete for the same Bot daemon; concurrent launchers can toggle the daemon environment and interrupt polling. Re-run the launcher after package updates so it reapplies and validates the API and middleware hooks.
+8. **Media:** files are not covered by EOT10; block unsupported protected-chat media instead of implying it is encrypted.
+
+For the current phone-side implementation details, see [`../Telegram-master/EOT10-ANDROID.md`](../Telegram-master/EOT10-ANDROID.md).
+
 ## Versioning and builds
 
 Both folders are independent Git repositories. The desktop release source is `OpenCodeTelegramLauncher.cs`; `EOT10Crypto.mjs` is embedded into `OpenCodeTelegram-v11.0.5.exe` during compilation, so the runtime EXE can be copied and launched from any directory without sidecar files. Keep the `.mjs` beside the source when rebuilding. The launcher can retry npm installation if a timed-out update leaves the Bot entry missing.

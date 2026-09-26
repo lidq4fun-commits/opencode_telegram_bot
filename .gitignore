@@ -1,0 +1,10 @@
+# Local Telegram credentials and runtime configuration
+.env
+.env.*
+*.log
+tailscale-install.log
+tailscale-setup-*.msi
+
+# Temporary editor/build artifacts
+*.tmp
+*.bak

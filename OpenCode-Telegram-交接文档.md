@@ -283,15 +283,15 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - Android 客户端支持配置多个 Bot，并为每个 Bot 单独设置至少 12 个字符的密码；每个 Bot 私聊按对应密码加解密。用户名是路由选择，不是密钥。
 - 密码以 Android Keystore AES-GCM 加密，密文文件保存在 app `noBackupFilesDir`；保存不向网络发送密码。新版本修复了 Keystore 加密 IV 错误：由 Keystore 生成 IV 并与密文一起保存。
 - EOT10 消息使用 `EOT10:` + Base64URL JSON；KDF 为 PBKDF2-HMAC-SHA256（250,000 次），加密为 AES-256-GCM。手机端和电脑端必须对同一个 Bot 使用相同密码。
-- 支持文本及 Telegram Rich Message；媒体文件本体尚未加密，目标 Bot 私聊中的媒体发送会被阻止。旧消息不会因修改密码而重加密，仍需旧密码。
+- 支持文本、Telegram Rich Message，以及加密为 `.eotm` 的照片/文档；收到的媒体在 Android 本地认证解密后打开。媒体组、视频编辑、live photo 和阅后即焚媒体不支持。旧消息不会因修改密码而重加密，仍需旧密码。
 - 加密设置页现为跟随 Telegram 语言和主题切换的卡片式界面，包含 Bot 卡片和确认删除流程；文案提供英文、简体中文、繁体中文。
-- 最新一次构建成功并通过 `apksigner verify`；APK 大小 77,509,613 bytes，SHA-256 `93439677E717E8B02F3A48DE58524AB458E79A683D863BEE7838F84E1773B3CE`，Telegram Saved Messages 消息 ID `17994`（2026-09-27）。Android Git 标签：`android-eot10-v11.0.5`。
+- Android 媒体版本 `android-eot10-v11.0.17`：APK `app.apk`，package version 12.10.4/code 70999，77,518,218 bytes，SHA-256 `20FF8DE20B95721926FED9C40966448B9749774B512B82C2D57337F55A0FFB72`；`apksigner verify` 通过。Telegram Saved Messages 消息 ID `19801`。该提交在 `EOT10-ANDROID.md` 记录。
 
 构建命令、源码文件列表、当前功能边界和 Keystore IV 说明详见 `EOT10-ANDROID.md`。这个 APK 是个人 debug 构建，不是官方 Telegram 发布版。
 
 ## 电脑端 v11 启动器
 
-当前开发的 v11 启动器源文件为 `OpenCodeTelegramLauncher.cs`，构建产物为 `OpenCodeTelegram-v11.0.5.exe`。编译时将 `EOT10Crypto.mjs` 嵌入 EXE，运行时不要求旁边另放脚本。v11 保留 v9 默认服务生命周期：npm 版本检查/更新、启动或复用 `127.0.0.1:4096` 上的 OpenCode、启动 Bot、网络恢复监控；退出窗口停止本次 Bot/OpenCode 服务。
+当前开发的 v11 启动器源文件为 `OpenCodeTelegramLauncher.cs`，当前构建产物为 `OpenCodeTelegram-v11.0.8.exe`。编译时将 `EOT10Crypto.mjs` 嵌入 EXE，运行时不要求旁边另放脚本。v11 保留 v9 默认服务生命周期：npm 版本检查/更新、启动或复用 `127.0.0.1:4096` 上的 OpenCode、启动 Bot、网络恢复监控；退出窗口停止本次 Bot/OpenCode 服务。
 
 - EOT10 **默认关闭**。启动时显示 10 秒倒计时；按 `E` 打开设置菜单，超时则直接继续启动。若已保存 v11 配置，超时自动加载保存值；首次无配置时是普通明文 Bot 模式。
 - 菜单支持：用已保存密码开启；添加/修改密码并开启；关闭但保留密码；删除密码并关闭；不更改继续启动。
@@ -303,10 +303,12 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - v11.0.2 不再探测 EXE 同目录 sidecar，确保启动器复制到任意目录均不会因 `.mjs` 路径影响加密。`--verify-portable` 用于无副作用验证内嵌模块。
 - v11.0.4 每次启动 Bot 前先停止旧 daemon，再按当前 DPAPI 配置重建，保证 EOT10 环境变量进入服务进程；`--skip-update` 可跳过 npm 更新检查。解密后重建 Telegram `bot_command` entity，使 `/status` 等命令进入 grammY 命令路由；加密关闭时拒绝 EOT10 密文，避免误送入 OpenCode。
 - v11.0.5 保留 `sendRichMessage` 结构并仅加密文本节点；Bot reply-markup 和 Rich Message 按钮标签保持可读。Android 解密 Rich Message 节点后使用原生富消息布局显示，并将旧版已加密 JSON 内容转换为可读文本。Android 发送 KDF 移到后台并预热盐/密钥；消息历史解密使用进程内缓存。
+- v11.0.8 与 Android `android-eot10-v11.0.17` 为协调的 EOT10 媒体版本。桌面端在上传照片/文档前将文件内容、文件名和 MIME 元数据封装为认证加密的 `.eotm` 文件；入站媒体先认证、解密再交给 Bot 文档处理器。Android 对应发送和本地打开解密已完成源码修改。两端版本标签分别维护在独立仓库中；媒体端到端行为仍需实际设备联调确认。
+- v11.0.8 EXE 为 169,984 bytes，SHA-256 `A3E1157C5D5C9DA626ACFAE0908D8CB3EBB6F99D37DB4B461287A3FAF4811669`；`--verify-portable` 验证内嵌 EOT10 模块成功。
 - 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.0.5.exe`，156,160 bytes，SHA-256 `C7DC69C6FED10E9CFBB49130F1FB2A160E6F92B503CC0B7E66B076A84A0D611E`（2026-09-26）。EOT10 模块内嵌；可从任意目录运行。最新版 EXE 已送入 Saved Messages，消息 ID `18021`。
 
 编译（Windows .NET Framework C# 编译器）：
 
 ```powershell
-& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo /target:exe /optimize+ /out:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegram-v11.0.5.exe' /win32icon:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.ico' /resource:'E:\opencode\encrypted_telegram_opencode_bot\EOT10Crypto.mjs',EOT10Crypto.mjs /reference:System.dll /reference:System.Core.dll /reference:System.Security.dll 'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.cs'
+& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo /target:exe /optimize+ /out:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegram-v11.0.8.exe' /win32icon:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.ico' /resource:'E:\opencode\encrypted_telegram_opencode_bot\EOT10Crypto.mjs',EOT10Crypto.mjs /reference:System.dll /reference:System.Core.dll /reference:System.Security.dll 'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.cs'
 ```

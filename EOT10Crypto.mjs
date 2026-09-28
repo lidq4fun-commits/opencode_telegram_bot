@@ -1,12 +1,17 @@
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
 
 const PREFIX = "EOT10:";
 const PASSWORD_ENV = "OPENCODE_TELEGRAM_EOT10_PASSWORD";
 const PBKDF2_ITERATIONS = 250000;
+const MEDIA_MAGIC = Buffer.from("EOT10M01", "ascii");
+const MEDIA_HEADER_LENGTH = MEDIA_MAGIC.length + 16 + 12;
 // One fresh session salt per Bot process lets both endpoints reuse the PBKDF2
 // result across messages; every envelope still gets its own AES-GCM nonce.
 const SESSION_SALT = randomBytes(16);
 const derivedKeys = new Map();
+const decryptedMediaFiles = new Map();
 
 function deriveKey(salt) {
   const keyId = salt.toString("base64url");
@@ -77,6 +82,103 @@ export function encryptEot10RichMessage(richMessage) {
   const salt = SESSION_SALT;
   const key = deriveKey(salt);
   return encryptRichValue(richMessage, null, salt, key);
+}
+
+export async function encryptEot10MediaInput(input) {
+  const source = input?.fileData;
+  let fileBytes;
+  if (Buffer.isBuffer(source) || source instanceof Uint8Array) {
+    fileBytes = Buffer.from(source);
+  } else if (typeof source === "string") {
+    // GrammY InputFile uses strings for local paths and file IDs. Only local paths
+    // may be encrypted; server file IDs cannot be forwarded into EOT10.
+    if (!source.startsWith(".") && !/^[A-Za-z]:[\\/]/.test(source) && !source.startsWith("/")) {
+      throw new Error("EOT10 requires a local media file, not a Telegram file_id");
+    }
+    fileBytes = await readFile(source);
+  } else if (source && source[Symbol.asyncIterator]) {
+    const chunks = [];
+    for await (const chunk of source) chunks.push(Buffer.from(chunk));
+    fileBytes = Buffer.concat(chunks);
+  } else {
+    throw new Error("Unsupported EOT10 media upload source");
+  }
+  const filename = input?.filename || (typeof source === "string" ? basename(source) : "attachment");
+  const extension = extname(filename).toLowerCase();
+  const mimeType = ({
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif",
+    ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown", ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  })[extension] || "application/octet-stream";
+  const buffer = encryptEot10MediaBuffer(fileBytes, { filename, mimeType, kind: mimeType.startsWith("image/") ? "photo" : "document" });
+  fileBytes.fill(0);
+  return { buffer, filename: `EOT10-${randomBytes(8).toString("hex")}.eotm` };
+}
+
+export function cacheDecryptedEot10Media(fileId, media) {
+  const key = String(fileId);
+  decryptedMediaFiles.set(key, media);
+  const timer = setTimeout(() => {
+    if (decryptedMediaFiles.get(key) === media) decryptedMediaFiles.delete(key);
+  }, 120000);
+  timer.unref?.();
+}
+
+export function takeDecryptedEot10Media(fileId) {
+  const key = String(fileId);
+  const media = decryptedMediaFiles.get(key);
+  if (media) decryptedMediaFiles.delete(key);
+  return media;
+}
+
+export function encryptEot10MediaBuffer(fileBytes, metadata = {}) {
+  const salt = SESSION_SALT;
+  const key = deriveKey(salt);
+  const iv = randomBytes(12);
+  const meta = Buffer.from(JSON.stringify({
+    v: 1,
+    filename: typeof metadata.filename === "string" ? metadata.filename : "attachment",
+    mimeType: typeof metadata.mimeType === "string" ? metadata.mimeType : "application/octet-stream",
+    kind: typeof metadata.kind === "string" ? metadata.kind : "document",
+  }), "utf8");
+  if (meta.length > 65535) throw new Error("EOT10 media metadata too large");
+  const length = Buffer.allocUnsafe(4);
+  length.writeUInt32BE(meta.length, 0);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(length), cipher.update(meta), cipher.update(Buffer.from(fileBytes)), cipher.final()]);
+  return Buffer.concat([MEDIA_MAGIC, salt, iv, ciphertext, cipher.getAuthTag()]);
+}
+
+export function isEot10MediaBuffer(value) {
+  return Buffer.isBuffer(value) && value.length >= MEDIA_HEADER_LENGTH + 20 && value.subarray(0, MEDIA_MAGIC.length).equals(MEDIA_MAGIC);
+}
+
+export function isEot10MediaDocument(document) {
+  return typeof document?.file_name === "string" && document.file_name.toLowerCase().endsWith(".eotm");
+}
+
+export function decryptEot10MediaBuffer(value) {
+  const packed = Buffer.from(value);
+  if (!isEot10MediaBuffer(packed)) throw new Error("File is not an EOT10 media envelope");
+  const offset = MEDIA_MAGIC.length;
+  const salt = packed.subarray(offset, offset + 16);
+  const iv = packed.subarray(offset + 16, offset + 28);
+  const tag = packed.subarray(packed.length - 16);
+  const data = packed.subarray(offset + 28, packed.length - 16);
+  const decipher = createDecipheriv("aes-256-gcm", deriveKey(salt), iv);
+  decipher.setAuthTag(tag);
+  const clear = Buffer.concat([decipher.update(data), decipher.final()]);
+  if (clear.length < 4) throw new Error("Invalid EOT10 media payload");
+  const metadataLength = clear.readUInt32BE(0);
+  if (metadataLength < 2 || metadataLength > 65535 || metadataLength + 4 > clear.length) throw new Error("Invalid EOT10 media metadata");
+  let metadata;
+  try {
+    metadata = JSON.parse(clear.subarray(4, metadataLength + 4).toString("utf8"));
+  } catch {
+    throw new Error("Malformed EOT10 media metadata");
+  }
+  if (metadata?.v !== 1 || typeof metadata.filename !== "string" || typeof metadata.mimeType !== "string") throw new Error("Unsupported EOT10 media metadata");
+  return { buffer: Buffer.from(clear.subarray(metadataLength + 4)), metadata };
 }
 
 export function decryptEot10(value) {

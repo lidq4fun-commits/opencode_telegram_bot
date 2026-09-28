@@ -217,10 +217,10 @@ class OpenCodeTelegramLauncher
                 "        // " + marker + ": forward every document as a file attachment without MIME/model-specific gates." + newline +
                 "        await ctx.reply(t(\"bot.file_downloading\"));" + newline +
                 "        if (await rejectQueuedMediaBeforePreparation(ctx, doc.file_size)) return;" + newline +
-                "        const downloadedFile = await downloadFile(ctx.api, doc.file_id);" + newline +
+                "        const genericAttachmentFile = await downloadFile(ctx.api, doc.file_id);" + newline +
                 "        const attachmentMime = mimeType || \"application/octet-stream\";" + newline +
-                "        const dataUri = toDataUri(downloadedFile.buffer, attachmentMime);" + newline +
-                "        await submitPrompt(caption, [{ type: \"file\", mime: attachmentMime, filename, url: dataUri }], doc.file_size || downloadedFile.buffer.length);" + newline +
+                "        const genericAttachmentDataUri = toDataUri(genericAttachmentFile.buffer, attachmentMime);" + newline +
+                "        await submitPrompt(caption, [{ type: \"file\", mime: attachmentMime, filename, url: genericAttachmentDataUri }], doc.file_size || genericAttachmentFile.buffer.length);" + newline +
                 "        return;" + newline +
                 "        if (isTextMimeType(mimeType, filename)) {";
             if (content.IndexOf(anchor, StringComparison.Ordinal) < 0)
@@ -316,7 +316,8 @@ class OpenCodeTelegramLauncher
                   content.IndexOf("EOT10 command entity compatibility", StringComparison.Ordinal) < 0 ||
                   content.IndexOf("EOT10 disabled-message guard", StringComparison.Ordinal) < 0 ||
                   content.IndexOf("EOT10 rich block encryption", StringComparison.Ordinal) < 0 ||
-                  content.IndexOf("EOT10 media upload encryption", StringComparison.Ordinal) < 0))
+                  content.IndexOf("EOT10 media upload encryption", StringComparison.Ordinal) < 0 ||
+                  content.IndexOf("EOT10 media groups encrypted", StringComparison.Ordinal) < 0))
             {
                 string previousBackup = botIndex + ".eot10-original";
                 if (!File.Exists(previousBackup))
@@ -345,9 +346,36 @@ class OpenCodeTelegramLauncher
                  string apiReplacement = "            // EOT10 desktop transport: enable only when explicitly configured at launcher startup.\n            const eot10Enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n            const targetBotChat = eot10Enabled && String(payload.chat_id ?? \"\") === String(config.telegram.allowedUserId);\n            const securedPayload = targetBotChat ? { ...payload } : payload;\n            let securedMethod = method;\n            const encryptMarkupText = value => Array.isArray(value) ? value.map(encryptMarkupText) : value && typeof value === \"object\" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === \"text\" && typeof item === \"string\" ? encryptEot10(item) : encryptMarkupText(item)])) : value;\n            if (targetBotChat && typeof securedPayload.text === \"string\") securedPayload.text = encryptEot10(securedPayload.text);\n            else if (targetBotChat && securedPayload.text && typeof securedPayload.text === \"object\") securedPayload.text = encryptEot10(JSON.stringify(securedPayload.text));\n            if (targetBotChat && typeof securedPayload.caption === \"string\") securedPayload.caption = encryptEot10(securedPayload.caption);\n            if (targetBotChat && securedPayload.reply_markup) securedPayload.reply_markup = encryptMarkupText(securedPayload.reply_markup);\n            if (targetBotChat && securedPayload.rich_message) securedPayload.rich_message = encryptEot10RichMessage(securedPayload.rich_message);\n            const runCall = async () => {\n                if (targetBotChat && method === \"sendMediaGroup\") throw new Error(\"EOT10 media groups must be sent as individually encrypted documents\");\n                const mediaField = ({ sendPhoto: \"photo\", sendDocument: \"document\", sendAudio: \"audio\", sendVoice: \"voice\", sendVideo: \"video\", sendAnimation: \"animation\", sendVideoNote: \"video_note\" })[method];\n                if (targetBotChat && mediaField && securedPayload[mediaField] != null) {\n                    const encryptedMedia = await encryptEot10MediaInput(securedPayload[mediaField]);\n                    securedPayload.document = new InputFile(encryptedMedia.buffer, encryptedMedia.filename);\n                    delete securedPayload[mediaField];\n                    securedMethod = \"sendDocument\";\n                }\n                const response = await prev(securedMethod, securedPayload, signal);";
                 apiReplacement = Regex.Replace(apiReplacement, @"            const encryptMarkupText = .*?\n", "");
                 apiReplacement = apiReplacement.Replace("            if (targetBotChat && securedPayload.reply_markup) securedPayload.reply_markup = encryptMarkupText(securedPayload.reply_markup);\n", "");
-                 apiReplacement = apiReplacement.Replace("// EOT10 desktop transport: enable only when explicitly configured at launcher startup.", "// EOT10 desktop transport: enable only when explicitly configured at launcher startup.\n            // EOT10 rich block encryption: preserve layout structure and leave button labels readable.\n            // EOT10 media upload encryption: convert outgoing file bytes to opaque EOT10M documents.");
+                apiReplacement = apiReplacement.Replace("// EOT10 desktop transport: enable only when explicitly configured at launcher startup.", "// EOT10 desktop transport: enable only when explicitly configured at launcher startup.\n            // EOT10 rich block encryption: preserve layout structure and leave button labels readable.\n            // EOT10 media upload encryption: convert outgoing file bytes to opaque EOT10M documents.");
+                apiReplacement = apiReplacement.Replace("// EOT10 media upload encryption: convert outgoing file bytes to opaque EOT10M documents.", "// EOT10 media upload encryption: convert outgoing file bytes to opaque EOT10M documents.\n            // EOT10 media groups encrypted: wrap every item and discard plaintext thumbnails.");
                 string oldRichRewrite = "            if (targetBotChat && securedPayload.rich_message) {\n                securedPayload.text = encryptEot10(JSON.stringify(securedPayload.rich_message));\n                delete securedPayload.rich_message;\n                securedMethod = method === \"sendRichMessageDraft\" ? \"sendMessageDraft\" : \"sendMessage\";\n            }";
                 apiReplacement = apiReplacement.Replace(oldRichRewrite, "            if (targetBotChat && securedPayload.rich_message) securedPayload.rich_message = encryptEot10RichMessage(securedPayload.rich_message);");
+                string mediaGroupGuard = "                if (targetBotChat && method === \"sendMediaGroup\") throw new Error(\"EOT10 media groups must be sent as individually encrypted documents\");";
+                string mediaGroupEncryption = "                if (targetBotChat && method === \"sendMediaGroup\") {\n" +
+                    "                    if (!Array.isArray(securedPayload.media) || securedPayload.media.length === 0) throw new Error(\"EOT10 media group is empty or malformed\");\n" +
+                    "                    securedPayload.media = await Promise.all(securedPayload.media.map(async item => {\n" +
+                    "                        const encryptedMedia = await encryptEot10MediaInput(item.media);\n" +
+                    "                        const securedItem = { ...item, type: \"document\", media: new InputFile(encryptedMedia.buffer, encryptedMedia.filename) };\n" +
+                    "                        delete securedItem.thumbnail; delete securedItem.thumb; delete securedItem.cover;\n" +
+                    "                        if (typeof item.caption === \"string\") { securedItem.caption = encryptEot10(item.caption); delete securedItem.caption_entities; }\n" +
+                    "                        return securedItem;\n" +
+                    "                    }));\n" +
+                    "                }";
+                if (apiReplacement.IndexOf(mediaGroupGuard, StringComparison.Ordinal) < 0)
+                {
+                    Console.WriteLine("[加密] 无法安装 EOT10 媒体组加密适配。");
+                    return false;
+                }
+                apiReplacement = apiReplacement.Replace(mediaGroupGuard, mediaGroupEncryption)
+                    .Replace("sendVideoNote: \"video_note\" })[method]", "sendVideoNote: \"video_note\", sendSticker: \"sticker\" })[method]")
+                    .Replace("delete securedPayload[mediaField];", "delete securedPayload[mediaField]; delete securedPayload.thumbnail; delete securedPayload.thumb; delete securedPayload.cover;");
+                if (apiReplacement.IndexOf("EOT10 media group is empty or malformed", StringComparison.Ordinal) < 0 ||
+                    apiReplacement.IndexOf("sendSticker: \"sticker\"", StringComparison.Ordinal) < 0 ||
+                    apiReplacement.IndexOf("delete securedPayload.thumbnail", StringComparison.Ordinal) < 0)
+                {
+                    Console.WriteLine("[加密] 媒体 API 覆盖不完整，拒绝启用可能泄露附件的发送路径。");
+                    return false;
+                }
                 if (apiReplacement.IndexOf("encryptMarkupText", StringComparison.Ordinal) >= 0 || apiReplacement.IndexOf("JSON.stringify(securedPayload.rich_message)", StringComparison.Ordinal) >= 0)
                 {
                     Console.WriteLine("[加密] 无法安装富文本/按钮兼容补丁。");
@@ -365,6 +393,7 @@ class OpenCodeTelegramLauncher
                   string middlewareReplacement = "    // EOT10 applies only to the authorized user's private conversation when explicitly enabled.\n    const eot10Enabled = process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === \"1\" && Boolean(process.env.OPENCODE_TELEGRAM_EOT10_PASSWORD);\n    logger.info(`[EOT10 runtime environment status] desktop transport ${eot10Enabled ? \"enabled\" : \"disabled\"}`);\n    bot.use(async (ctx, next) => {\n        if (!eot10Enabled) { await next(); return; }\n        const message = ctx.message;\n        const authorizedSender = String(ctx.from?.id ?? \"\") === String(config.telegram.allowedUserId);\n        const targetBotPrivateChat = authorizedSender && ctx.chat?.type === \"private\" &&\n            String(ctx.chat.id) === String(config.telegram.allowedUserId);\n        if (authorizedSender && !targetBotPrivateChat) return;\n        if (!targetBotPrivateChat) { await next(); return; }\n        if (message && typeof message.text !== \"string\") {\n            await ctx.reply(\"v11 当前仅支持加密文本；媒体消息已拒绝。\");\n            return;\n        }\n        if (typeof message?.text === \"string\") {\n            if (!isEot10Message(message.text)) {\n                await ctx.reply(\"v11 加密模式已启用。请使用配套手机端发送 EOT10 加密消息。\");\n                return;\n            }\n            try { message.text = decryptEot10(message.text); }\n            catch (error) { logger.warn(\"[EOT10] Rejected invalid encrypted message\", error); await ctx.reply(\"加密消息无法验证或解密，请检查密码和消息完整性。\"); return; }\n        }\n        await next();\n    });\n    bot.use(authMiddleware);";
                 string oldMediaGuard = "        if (message && typeof message.text !== \"string\") {\n            await ctx.reply(\"v11 当前仅支持加密文本；媒体消息已拒绝。\");\n            return;\n        }";
                 string eot10MediaGuard = "        if (message && typeof message.text !== \"string\") {\n            const document = message.document;\n            if (!document || !isEot10MediaDocument(document)) {\n                await ctx.reply(\"加密模式只接受 EOT10 加密的图片/文档；其他媒体暂不支持。\");\n                return;\n            }\n            try {\n                const encryptedMedia = await downloadEot10TelegramFile(ctx.api, document.file_id);\n                const media = decryptEot10MediaBuffer(encryptedMedia.buffer);\n                cacheDecryptedEot10Media(document.file_id, { buffer: media.buffer, filePath: encryptedMedia.filePath });\n                document.file_name = media.metadata.filename;\n                document.mime_type = media.metadata.mimeType;\n                document.file_size = media.buffer.length;\n                if (message.caption) {\n                    if (!isEot10Message(message.caption)) { await ctx.reply(\"加密媒体说明文字必须使用 EOT10 加密。\"); return; }\n                    message.caption = decryptEot10(message.caption);\n                }\n            } catch (error) {\n                logger.warn(\"[EOT10] Rejected invalid encrypted media\", error);\n                await ctx.reply(\"加密文件无法验证或解密；请确认手机和 Bot 使用同一密码。\");\n                return;\n            }\n            await next();\n            return;\n        }";
+                middlewareReplacement = middlewareReplacement.Replace("加密模式只接受 EOT10 加密的图片/文档；其他媒体暂不支持。", "加密模式只接受 EOT10 加密附件；请使用配套客户端重新发送。");
                 middlewareReplacement = middlewareReplacement.Replace(oldMediaGuard, eot10MediaGuard);
                 if (middlewareReplacement.IndexOf("v11 当前仅支持加密文本", StringComparison.Ordinal) >= 0)
                 {

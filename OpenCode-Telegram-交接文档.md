@@ -285,13 +285,13 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - EOT10 消息使用 `EOT10:` + Base64URL JSON；KDF 为 PBKDF2-HMAC-SHA256（250,000 次），加密为 AES-256-GCM。手机端和电脑端必须对同一个 Bot 使用相同密码。
 - 支持文本、Telegram Rich Message，以及加密为 `.eotm` 的照片/文档；收到的媒体在 Android 本地认证解密后打开。媒体组、视频编辑、live photo 和阅后即焚媒体不支持。旧消息不会因修改密码而重加密，仍需旧密码。
 - 加密设置页现为跟随 Telegram 语言和主题切换的卡片式界面，包含 Bot 卡片和确认删除流程；文案提供英文、简体中文、繁体中文。
-- Android 媒体版本 `android-eot10-v11.0.17`：APK `app.apk`，package version 12.10.4/code 70999，77,518,218 bytes，SHA-256 `20FF8DE20B95721926FED9C40966448B9749774B512B82C2D57337F55A0FFB72`；`apksigner verify` 通过。Telegram Saved Messages 消息 ID `19801`。该提交在 `EOT10-ANDROID.md` 记录。
+- Android 全附件版本 `android-eot10-v11.0.18`：APK `app.apk`，package version 12.10.4/code 70999，77,518,377 bytes，SHA-256 `13AD339551AEF90DF7AB49B817BFA0CC056756E1DCC293BAE0A57623730C091D`；`apksigner verify` 通过。此构建尚未上传 Telegram。此前 v11.0.17 APK 的 Saved Messages 消息 ID 为 `19801`。本次构建详情记录在 Android `EOT10-ANDROID.md`。
 
 构建命令、源码文件列表、当前功能边界和 Keystore IV 说明详见 `EOT10-ANDROID.md`。这个 APK 是个人 debug 构建，不是官方 Telegram 发布版。
 
 ## 电脑端 v11 启动器
 
-当前开发的 v11 启动器源文件为 `OpenCodeTelegramLauncher.cs`，当前构建产物为 `OpenCodeTelegram-v11.0.9.exe`。编译时将 `EOT10Crypto.mjs` 嵌入 EXE，运行时不要求旁边另放脚本。v11 保留 v9 默认服务生命周期：npm 版本检查/更新、启动或复用 `127.0.0.1:4096` 上的 OpenCode、启动 Bot、网络恢复监控；退出窗口停止本次 Bot/OpenCode 服务。
+当前开发的 v11 启动器源文件为 `OpenCodeTelegramLauncher.cs`，当前构建产物为 `OpenCodeTelegram-v11.0.10.exe`。编译时将 `EOT10Crypto.mjs` 嵌入 EXE，运行时不要求旁边另放脚本。v11 保留 v9 默认服务生命周期：npm 版本检查/更新、启动或复用 `127.0.0.1:4096` 上的 OpenCode、启动 Bot、网络恢复监控；退出窗口停止本次 Bot/OpenCode 服务。
 
 - EOT10 **默认关闭**。启动时显示 10 秒倒计时；按 `E` 打开设置菜单，超时则直接继续启动。若已保存 v11 配置，超时自动加载保存值；首次无配置时是普通明文 Bot 模式。
 - 菜单支持：用已保存密码开启；添加/修改密码并开启；关闭但保留密码；删除密码并关闭；不更改继续启动。
@@ -307,10 +307,12 @@ Get-NetTCPConnection -LocalPort 4096 -State Listen
 - v11.0.8 EXE 为 169,984 bytes，SHA-256 `A3E1157C5D5C9DA626ACFAE0908D8CB3EBB6F99D37DB4B461287A3FAF4811669`；`--verify-portable` 验证内嵌 EOT10 模块成功。
 - v11.0.9 对所有 Bot 文档采用统一文件附件路径转交 OpenCode，不按扩展名/MIME 做 allowlist，也不再因文本文件大小、图片/PDF 模型能力检查或提取器设置而拦截格式。EOT10 模式下仍先认证解密文件。文件传输仍受 Telegram Bot API 下载/上传限制及 Bot 排队保护约束。
 - v11.0.9 EXE 为 170,496 bytes，SHA-256 `8724F0155C761BFA530BF4EE40760671E84047DF0365D199ADDAD3B1DBCBC2C5`；`--verify-portable` 验证内嵌 EOT10 模块成功。
+- v11.0.10 在 EOT10 开启时覆盖所有文件发送 API（photo/document/audio/voice/video/animation/video_note/sticker）及 sendMediaGroup：每个附件单独加密为 `.eotm`，加密字幕并移除明文缩略图。入站只接受 EOT10 `.eotm` 附件，先认证解密再转给 OpenCode。Android 将可读的文件附件（任意扩展名、包括视频/音频）统一封装为加密文档；不支持的非文件内容或无法读取的附件在上传前失败关闭。
+- v11.0.10 EXE 为 174,592 bytes，SHA-256 `9B0F0B4B419B6BA652B538A938F0F38573F455626B6CBE6960493D767BCD8255`；在隔离副本中验证启动器补丁可应用，生成的文档处理器、Bot 入口和文件下载服务均通过 `node --check`；`--verify-portable` 通过。
 - 已用 .NET Framework `csc.exe` 编译成功：`OpenCodeTelegram-v11.0.5.exe`，156,160 bytes，SHA-256 `C7DC69C6FED10E9CFBB49130F1FB2A160E6F92B503CC0B7E66B076A84A0D611E`（2026-09-26）。EOT10 模块内嵌；可从任意目录运行。最新版 EXE 已送入 Saved Messages，消息 ID `18021`。
 
 编译（Windows .NET Framework C# 编译器）：
 
 ```powershell
-& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo /target:exe /optimize+ /out:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegram-v11.0.9.exe' /win32icon:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.ico' /resource:'E:\opencode\encrypted_telegram_opencode_bot\EOT10Crypto.mjs',EOT10Crypto.mjs /reference:System.dll /reference:System.Core.dll /reference:System.Security.dll 'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.cs'
+& 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo /target:exe /optimize+ /out:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegram-v11.0.10.exe' /win32icon:'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.ico' /resource:'E:\opencode\encrypted_telegram_opencode_bot\EOT10Crypto.mjs',EOT10Crypto.mjs /reference:System.dll /reference:System.Core.dll /reference:System.Security.dll 'E:\opencode\encrypted_telegram_opencode_bot\OpenCodeTelegramLauncher.cs'
 ```

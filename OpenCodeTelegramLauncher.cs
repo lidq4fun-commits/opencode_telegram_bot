@@ -197,6 +197,50 @@ class OpenCodeTelegramLauncher
         return false;
     }
 
+    static bool EnsureGenericDocumentForwarding(string appData)
+    {
+        try
+        {
+            string documentHandlerPath = Path.Combine(appData, "npm", "node_modules", "@grinev", "opencode-telegram-bot", "dist", "bot", "handlers", "document-handler.js");
+            if (!File.Exists(documentHandlerPath))
+            {
+                Console.WriteLine("[文件] 找不到 Bot 文档处理器，无法启用通用文件转交。");
+                return false;
+            }
+            string content = File.ReadAllText(documentHandlerPath, Encoding.UTF8);
+            const string marker = "OpenCode generic all-extension file forwarding";
+            if (content.IndexOf(marker, StringComparison.Ordinal) >= 0) return true;
+
+            string newline = content.Contains("\r\n") ? "\r\n" : "\n";
+            string anchor = "    try {" + newline + "        if (isTextMimeType(mimeType, filename)) {";
+            string replacement = "    try {" + newline +
+                "        // " + marker + ": forward every document as a file attachment without MIME/model-specific gates." + newline +
+                "        await ctx.reply(t(\"bot.file_downloading\"));" + newline +
+                "        if (await rejectQueuedMediaBeforePreparation(ctx, doc.file_size)) return;" + newline +
+                "        const downloadedFile = await downloadFile(ctx.api, doc.file_id);" + newline +
+                "        const attachmentMime = mimeType || \"application/octet-stream\";" + newline +
+                "        const dataUri = toDataUri(downloadedFile.buffer, attachmentMime);" + newline +
+                "        await submitPrompt(caption, [{ type: \"file\", mime: attachmentMime, filename, url: dataUri }], doc.file_size || downloadedFile.buffer.length);" + newline +
+                "        return;" + newline +
+                "        if (isTextMimeType(mimeType, filename)) {";
+            if (content.IndexOf(anchor, StringComparison.Ordinal) < 0)
+            {
+                Console.WriteLine("[文件] 当前 Bot 文档处理器结构已变化，无法安全接入通用文件转交。");
+                return false;
+            }
+            string backupPath = documentHandlerPath + ".opencode-all-files-original";
+            if (!File.Exists(backupPath)) File.Copy(documentHandlerPath, backupPath, false);
+            File.WriteAllText(documentHandlerPath, content.Replace(anchor, replacement), new UTF8Encoding(false));
+            Console.WriteLine("[文件] 已启用所有后缀文档的 OpenCode 附件转交。");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[文件] 无法启用通用文件转交：" + ex.Message);
+            return false;
+        }
+    }
+
     static bool EnsureEot10Encryption(string appData)
     {
         try
@@ -250,35 +294,6 @@ class OpenCodeTelegramLauncher
                 string fileDownloadBackup = fileDownloadPath + ".eot10-original";
                 if (!File.Exists(fileDownloadBackup)) File.Copy(fileDownloadPath, fileDownloadBackup, false);
                 File.WriteAllText(fileDownloadPath, fileDownloadContent, new UTF8Encoding(false));
-            }
-
-            string documentHandlerPath = Path.Combine(dist, "handlers", "document-handler.js");
-            if (!File.Exists(documentHandlerPath))
-            {
-                Console.WriteLine("[加密] 找不到 Bot 文档处理器，无法启用 EOT10 通用文件输入。");
-                return false;
-            }
-            string documentHandlerContent = File.ReadAllText(documentHandlerPath, Encoding.UTF8);
-            if (documentHandlerContent.IndexOf("EOT10 generic encrypted document input", StringComparison.Ordinal) < 0)
-            {
-                string documentNewline = documentHandlerContent.Contains("\r\n") ? "\r\n" : "\n";
-                string unsupportedDocumentAnchor = "        logger.warn(`[Document] Unsupported document MIME type: ${mimeType}, filename=${filename}`);" + documentNewline +
-                    "        await ctx.reply(t(\"bot.file_type_unsupported\"));";
-                string genericDocumentHandler = "        // EOT10 generic encrypted document input: pass authenticated file bytes to OpenCode." + documentNewline +
-                    "        await ctx.reply(t(\"bot.file_downloading\"));" + documentNewline +
-                    "        if (await rejectQueuedMediaBeforePreparation(ctx, doc.file_size)) return;" + documentNewline +
-                    "        const downloadedFile = await downloadFile(ctx.api, doc.file_id);" + documentNewline +
-                    "        const dataUri = toDataUri(downloadedFile.buffer, mimeType || \"application/octet-stream\");" + documentNewline +
-                    "        await submitPrompt(caption, [{ type: \"file\", mime: mimeType || \"application/octet-stream\", filename, url: dataUri }], doc.file_size || 0);";
-                if (documentHandlerContent.IndexOf(unsupportedDocumentAnchor, StringComparison.Ordinal) < 0)
-                {
-                    Console.WriteLine("[加密] 当前 Bot 文档处理器结构已变化，无法接入通用 EOT10 文件输入。");
-                    return false;
-                }
-                string documentBackup = documentHandlerPath + ".eot10-original";
-                if (!File.Exists(documentBackup)) File.Copy(documentHandlerPath, documentBackup, false);
-                documentHandlerContent = documentHandlerContent.Replace(unsupportedDocumentAnchor, genericDocumentHandler);
-                File.WriteAllText(documentHandlerPath, documentHandlerContent, new UTF8Encoding(false));
             }
 
             string content = File.ReadAllText(botIndex, Encoding.UTF8);
@@ -848,6 +863,7 @@ class OpenCodeTelegramLauncher
         if (skipUpdate) Console.WriteLine("[更新] 已按参数跳过 npm 更新，使用当前已安装版本。");
         else TryUpdateBot(botCmd);
         if (!EnsureInstalledBotEntryAvailable(appData)) { Console.ReadKey(); return; }
+        if (!EnsureGenericDocumentForwarding(appData)) { Console.ReadKey(); return; }
         Console.WriteLine("[4/7] 正在应用 EOT10 收发设置...");
         bool eotReady = eot10Enabled ? EnsureEot10Encryption(appData) : EnsureEot10Disabled(appData);
         if (!eotReady) { Console.ReadKey(); return; }

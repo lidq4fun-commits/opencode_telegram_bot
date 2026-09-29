@@ -22,45 +22,6 @@ class OpenCodeTelegramLauncher
     static DateTime lastBotStartAttemptUtc = DateTime.MinValue;
     static readonly TimeSpan BotStartCooldown = TimeSpan.FromSeconds(90);
 
-    static string LoadBotToken(string envPath)
-    {
-        try
-        {
-            foreach (string line in File.ReadAllLines(envPath, Encoding.UTF8))
-            {
-                string trimmed = line.Trim();
-                if (!trimmed.StartsWith("TELEGRAM_BOT_TOKEN=", StringComparison.Ordinal)) continue;
-                string token = trimmed.Substring("TELEGRAM_BOT_TOKEN=".Length).Trim();
-                if (token.Length >= 2 && ((token[0] == '"' && token[token.Length - 1] == '"') || (token[0] == '\'' && token[token.Length - 1] == '\'')))
-                    token = token.Substring(1, token.Length - 2);
-                return token;
-            }
-        }
-        catch { }
-        return "";
-    }
-
-    static bool IsTelegramApiReachable(string token)
-    {
-        if (String.IsNullOrWhiteSpace(token)) return false;
-        try
-        {
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            var request = (HttpWebRequest)WebRequest.Create("https://api.telegram.org/bot" + token + "/getMe");
-            request.Method = "GET";
-            request.Timeout = 8000;
-            request.ReadWriteTimeout = 8000;
-            request.Proxy = WebRequest.DefaultWebProxy;
-            using (var response = (HttpWebResponse)request.GetResponse())
-            using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
-            {
-                string body = reader.ReadToEnd();
-                return response.StatusCode == HttpStatusCode.OK && body.IndexOf("\"ok\":true", StringComparison.OrdinalIgnoreCase) >= 0;
-            }
-        }
-        catch { return false; }
-    }
-
     static string RunBotCli(string botCmd, string arguments, int timeoutMs)
     {
         try
@@ -986,29 +947,16 @@ class OpenCodeTelegramLauncher
 
         System.Threading.Thread.Sleep(2500);
         Console.WriteLine("机器人已经启动，可以进行对话。OpenCode Server 已监听 127.0.0.1:4096。");
-        Console.WriteLine("网络恢复和 Bot 意外退出会自动检测，每 20 秒检查一次。");
+        Console.WriteLine("Bot 意外退出会自动检测并尝试恢复，每 20 秒检查一次。");
         Console.WriteLine("保持此窗口打开；关闭窗口将停止机器人和 OpenCode。\n");
-        string token = LoadBotToken(Path.Combine(appData, "opencode-telegram-bot", ".env"));
-        bool telegramUnavailable = false;
         bool firstProbe = true;
         while (!stopping)
         {
             Thread.Sleep(20000);
             if (stopping) break;
-            bool reachable = IsTelegramApiReachable(token);
-            if (!reachable)
-            {
-                if (!telegramUnavailable) Console.WriteLine("[监测] Telegram 暂时无法连接，等待网络恢复...");
-                telegramUnavailable = true;
-                firstProbe = false;
-                continue;
-            }
-            if (telegramUnavailable)
-            {
-                telegramUnavailable = false;
-                RestartBotDaemon(botCmd, "检测到 Telegram 网络已恢复");
-            }
-            else if (!IsBotDaemonRunning(botCmd))
+            // The launcher may not use the Bot's Telegram proxy. A separate getMe
+            // probe can fail while the daemon is successfully polling and replying.
+            if (!IsBotDaemonRunning(botCmd))
             {
                 RestartBotDaemon(botCmd, firstProbe ? "Bot daemon 未运行" : "检测到 Bot daemon 已退出");
             }

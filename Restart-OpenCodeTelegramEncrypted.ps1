@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$launcherPath = Join-Path $PSScriptRoot 'OpenCodeTelegram-v11.0.16.exe'
+$launcherPath = Join-Path $PSScriptRoot 'OpenCodeTelegram-v11.0.17.exe'
 if (-not (Test-Path -LiteralPath $launcherPath -PathType Leaf)) {
     throw "Latest launcher not found: $launcherPath"
 }
@@ -75,5 +75,5 @@ foreach ($old in $oldLaunchers) {
 
 Start-Sleep -Seconds 2
 $newLauncher = Start-Process -FilePath $launcherPath -WorkingDirectory $PSScriptRoot -PassThru
-Write-Host "Started OpenCodeTelegram-v11.0.16.exe, PID $($newLauncher.Id)."
+Write-Host "Started OpenCodeTelegram-v11.0.17.exe, PID $($newLauncher.Id)."
 Write-Host 'The launcher will load the enabled setting automatically. Leave its window running.'

@@ -4,9 +4,9 @@
 
 ## 推荐启动器
 
-双击：`OpenCodeTelegram-v11.0.16.exe`
+双击：`OpenCodeTelegram-v11.0.17.exe`
 
-v11.0.16 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目录运行，不依赖旁置脚本。`EOT10Crypto.mjs` 保留为协议源文件和重新编译输入。可运行 `OpenCodeTelegram-v11.0.16.exe --verify-portable` 单独验证内嵌模块，不启动服务。
+v11.0.17 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目录运行，不依赖旁置脚本。`EOT10Crypto.mjs` 保留为协议源文件和重新编译输入。可运行 `OpenCodeTelegram-v11.0.17.exe --verify-portable` 单独验证内嵌模块，不启动服务。
 
 启动器会按顺序：
 
@@ -17,7 +17,7 @@ v11.0.16 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目�
 5. 查询失败或更新失败：保留当前版本并继续启动。
 6. 启动本机 OpenCode Server（`127.0.0.1:4096`）。
 7. 启动 Telegram Bot，并提示“机器人已经启动，可以进行对话”。
-8. 每 20 秒检查 Telegram API 连通性和 Bot daemon 状态；断网恢复后重启 Bot，Bot 意外退出时自动重新启动。
+8. 每 20 秒检查 Bot daemon 状态；意外退出时按至少 90 秒的间隔尝试重新启动，不使用可能与 Bot 代理设置不同的独立 Telegram API 探针判定断线。
 9. 运行 npm 更新后重新应用兼容修复：空闲时遇到旧问答卡片，可直接用 `/new` 开新对话并自动清理旧卡片。
 10. Bot 重连尝试间隔至少 90 秒，避免恢复窗口尚未完成时重复拉起多个轮询实例；启动时会复用已健康的 OpenCode Server。
 11. 启动后显示 10 秒加密设置入口；默认关闭 EOT10，超时自动按普通模式启动。此前保存的设置会自动加载；可在窗口启动时按 `E` 开启/关闭加密、添加/修改密码或删除密码。
@@ -26,7 +26,7 @@ v11.0.16 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目�
 14. 发往手机的 Rich Message 保留 Telegram 富文本块结构，只加密可见文本字段；回复键盘和 Rich Message 按钮标签保持可见。
 15. Bot 对可识别 MIME 的附件继续直接提交 OpenCode file part；文本/代码文件作为文本内容提交。Telegram 给出 `application/octet-stream` 时，常见后缀会映射到对应 MIME；未知后缀若内容为有效 UTF-8 且无二进制控制字符（如 `.plain` 配置），也会作为文本处理。仍无法识别的二进制文件才原样保存到当前项目 `.opencode-telegram-attachments` 并由 OpenCode agent 本地工具读取。EOT10 开启时，文档、图片、视频、音频、贴纸等上传 API 及媒体组中的每个附件都会分别加密为 `.eotm`，字幕也会加密；入站只接收认证通过的 EOT10 文件，解密后再转交。所有失败都不会退回明文发送。
 
-`Restart-OpenCodeTelegramEncrypted.ps1` 会使用当前 Windows 用户已保存的 DPAPI 密码开启 EOT10、关闭旧启动器并启动 v11.0.16；没有已保存密码时需先在启动器设置菜单设置。上传的未知二进制文件保留在项目中的 `.opencode-telegram-attachments`，该目录被 Git 忽略，应按需自行清理。已知类型直接发送仍受 OpenCode 和当前模型的实际输入能力约束。
+`Restart-OpenCodeTelegramEncrypted.ps1` 会使用当前 Windows 用户已保存的 DPAPI 密码开启 EOT10、关闭旧启动器并启动 v11.0.17；没有已保存密码时需先在启动器设置菜单设置。上传的未知二进制文件保留在项目中的 `.opencode-telegram-attachments`，该目录被 Git 忽略，应按需自行清理。已知类型直接发送仍受 OpenCode 和当前模型的实际输入能力约束。
 
 窗口保持打开即可使用；关闭窗口会停止 Bot 和本次启动的 OpenCode Server。没有配置 Windows 登录自动启动。
 
@@ -64,7 +64,7 @@ Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
 
 ## 断网恢复
 
-Telegram Bot 库在 Telegram API 连接失败后可能退出且不再重试。v8 启动器在运行期间每 20 秒检查 Telegram API 和 Bot daemon；检测到网络恢复时会先停止旧 Bot daemon 再重新启动。若 daemon 意外退出，也会在 Telegram API 可达后自动拉起。此监控只管理 Telegram Bot，不会重启 OpenCode Server。关闭启动器窗口仍会停止 Bot 和 OpenCode。
+Telegram Bot 库在 Telegram API 连接失败后可能退出且不再重试。v11.0.17 启动器每 20 秒检查 Bot daemon 状态，退出后至少间隔 90 秒尝试重新启动；Bot 使用自身的网络/代理配置重新连接。不再以启动器的独立 `getMe` 请求是否成功判断网络可用性，避免 Bot 正常工作时误报“Telegram 暂时无法连接”或误重启。此监控只管理 Telegram Bot，不会重启 OpenCode Server。关闭启动器窗口仍会停止 Bot 和 OpenCode。
 
 ## 新会话清理旧问答
 

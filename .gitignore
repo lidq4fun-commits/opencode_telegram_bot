@@ -5,6 +5,9 @@
 tailscale-install.log
 tailscale-setup-*.msi
 
+# Telegram uploads copied into the working tree can contain private user data.
+.opencode-telegram-attachments/
+
 # Temporary editor/build artifacts
 *.tmp
 *.bak

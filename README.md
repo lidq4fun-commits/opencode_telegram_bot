@@ -4,9 +4,9 @@
 
 ## 推荐启动器
 
-双击：`OpenCodeTelegram-v11.0.10.exe`
+双击：`OpenCodeTelegram-v11.0.16.exe`
 
-v11.0.10 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目录运行，不依赖旁置脚本。`EOT10Crypto.mjs` 保留为协议源文件和重新编译输入。可运行 `OpenCodeTelegram-v11.0.10.exe --verify-portable` 单独验证内嵌模块，不启动服务。
+v11.0.16 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目录运行，不依赖旁置脚本。`EOT10Crypto.mjs` 保留为协议源文件和重新编译输入。可运行 `OpenCodeTelegram-v11.0.16.exe --verify-portable` 单独验证内嵌模块，不启动服务。
 
 启动器会按顺序：
 
@@ -24,7 +24,9 @@ v11.0.10 可执行文件已构建并内嵌 EOT10 加密模块；可从任意目�
 12. 每次启动 Bot 前先停止旧 daemon，确保它继承本次启动所加载的加密开关和密码；`--skip-update` 可在修复/重启时跳过 npm 检查。
 13. EOT10 开启时先解密再恢复 Telegram 命令 entity，使 `/status` 等命令正常分派；关闭时拒绝 EOT10 密文，避免密文被当作普通提示词处理。
 14. 发往手机的 Rich Message 保留 Telegram 富文本块结构，只加密可见文本字段；回复键盘和 Rich Message 按钮标签保持可见。
-15. Bot 将各种后缀名的附件都作为文件转交给 OpenCode，不再按文件扩展名、MIME 或当前模型能力筛选格式。EOT10 开启时，文档、图片、视频、音频、贴纸等上传 API 及媒体组中的每个附件都会分别加密为 `.eotm`，字幕也会加密；入站只接收认证通过的 EOT10 文件，解密后再转交。所有失败都不会退回明文发送。
+15. Bot 对可识别 MIME 的附件继续直接提交 OpenCode file part；文本/代码文件作为文本内容提交。Telegram 给出 `application/octet-stream` 时，常见后缀会映射到对应 MIME；未知后缀若内容为有效 UTF-8 且无二进制控制字符（如 `.plain` 配置），也会作为文本处理。仍无法识别的二进制文件才原样保存到当前项目 `.opencode-telegram-attachments` 并由 OpenCode agent 本地工具读取。EOT10 开启时，文档、图片、视频、音频、贴纸等上传 API 及媒体组中的每个附件都会分别加密为 `.eotm`，字幕也会加密；入站只接收认证通过的 EOT10 文件，解密后再转交。所有失败都不会退回明文发送。
+
+`Restart-OpenCodeTelegramEncrypted.ps1` 会使用当前 Windows 用户已保存的 DPAPI 密码开启 EOT10、关闭旧启动器并启动 v11.0.16；没有已保存密码时需先在启动器设置菜单设置。上传的未知二进制文件保留在项目中的 `.opencode-telegram-attachments`，该目录被 Git 忽略，应按需自行清理。已知类型直接发送仍受 OpenCode 和当前模型的实际输入能力约束。
 
 窗口保持打开即可使用；关闭窗口会停止 Bot 和本次启动的 OpenCode Server。没有配置 Windows 登录自动启动。
 

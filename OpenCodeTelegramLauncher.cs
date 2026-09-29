@@ -208,30 +208,89 @@ class OpenCodeTelegramLauncher
                 return false;
             }
             string content = File.ReadAllText(documentHandlerPath, Encoding.UTF8);
-            const string marker = "OpenCode generic all-extension file forwarding";
+            const string previousMimeMarker = "OpenCode direct attachment forwarding with MIME inference";
+            const string previousRawMarker = "OpenCode raw workspace attachment forwarding";
+            const string previousLocalMarker = "OpenCode workspace-local raw attachment access";
+            const string previousLegacyMarker = "OpenCode generic all-extension file forwarding";
+            const string previousHybridMarker = "OpenCode hybrid direct-and-local attachment handling";
+            if (content.IndexOf(previousMimeMarker, StringComparison.Ordinal) >= 0 ||
+                content.IndexOf(previousRawMarker, StringComparison.Ordinal) >= 0 ||
+                content.IndexOf(previousLocalMarker, StringComparison.Ordinal) >= 0 ||
+                content.IndexOf(previousLegacyMarker, StringComparison.Ordinal) >= 0 ||
+                content.IndexOf(previousHybridMarker, StringComparison.Ordinal) >= 0)
+            {
+                string legacyBackup = documentHandlerPath + ".opencode-all-files-original";
+                if (!File.Exists(legacyBackup))
+                {
+                    Console.WriteLine("[文件] 检测到旧版附件补丁但缺少原文件备份，无法安全切换到本地读取模式。");
+                    return false;
+                }
+                File.Copy(legacyBackup, documentHandlerPath, true);
+                content = File.ReadAllText(documentHandlerPath, Encoding.UTF8);
+            }
+            const string marker = "OpenCode hybrid attachment handling with UTF-8 detection";
             if (content.IndexOf(marker, StringComparison.Ordinal) >= 0) return true;
 
             string newline = content.Contains("\r\n") ? "\r\n" : "\n";
             string anchor = "    try {" + newline + "        if (isTextMimeType(mimeType, filename)) {";
             string replacement = "    try {" + newline +
-                "        // " + marker + ": forward every document as a file attachment without MIME/model-specific gates." + newline +
+                "        // " + marker + ": use OpenCode file parts for recognized types; save only unrecognized binary formats for local tool access." + newline +
                 "        await ctx.reply(t(\"bot.file_downloading\"));" + newline +
                 "        if (await rejectQueuedMediaBeforePreparation(ctx, doc.file_size)) return;" + newline +
                 "        const genericAttachmentFile = await downloadFile(ctx.api, doc.file_id);" + newline +
-                "        const attachmentMime = mimeType || \"application/octet-stream\";" + newline +
-                "        const genericAttachmentDataUri = toDataUri(genericAttachmentFile.buffer, attachmentMime);" + newline +
-                "        await submitPrompt(caption, [{ type: \"file\", mime: attachmentMime, filename, url: genericAttachmentDataUri }], doc.file_size || genericAttachmentFile.buffer.length);" + newline +
+                "        const extensionMime = ({ pdf: \"application/pdf\", png: \"image/png\", jpg: \"image/jpeg\", jpeg: \"image/jpeg\", gif: \"image/gif\", webp: \"image/webp\", bmp: \"image/bmp\", tif: \"image/tiff\", tiff: \"image/tiff\", mp3: \"audio/mpeg\", wav: \"audio/wav\", m4a: \"audio/mp4\", ogg: \"audio/ogg\", mp4: \"video/mp4\", mov: \"video/quicktime\", webm: \"video/webm\", txt: \"text/plain\", md: \"text/markdown\", csv: \"text/csv\", json: \"application/json\", xml: \"application/xml\", html: \"text/html\", htm: \"text/html\", js: \"text/javascript\", ts: \"text/typescript\", py: \"text/x-python\", c: \"text/x-c\", h: \"text/x-c\", cpp: \"text/x-c++\", java: \"text/x-java\", log: \"text/plain\", doc: \"application/msword\", docx: \"application/vnd.openxmlformats-officedocument.wordprocessingml.document\", rtf: \"application/rtf\", odt: \"application/vnd.oasis.opendocument.text\", ppt: \"application/vnd.ms-powerpoint\", pptx: \"application/vnd.openxmlformats-officedocument.presentationml.presentation\", xls: \"application/vnd.ms-excel\", xlsx: \"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\", zip: \"application/zip\", gz: \"application/gzip\", tar: \"application/x-tar\", rar: \"application/vnd.rar\", sevenz: \"application/x-7z-compressed\", \"7z\": \"application/x-7z-compressed\" })[path.extname(filename).slice(1).toLowerCase()];" + newline +
+                "        const attachmentMime = !mimeType || mimeType === \"application/octet-stream\" ? (extensionMime || \"application/octet-stream\") : mimeType;" + newline +
+                "        let detectedText = null;" + newline +
+                "        if (attachmentMime === \"application/octet-stream\" && genericAttachmentFile.buffer.length > 0) {" + newline +
+                "            try {" + newline +
+                "                const decoded = new TextDecoder(\"utf-8\", { fatal: true }).decode(genericAttachmentFile.buffer);" + newline +
+                "                if (!/[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]/.test(decoded)) detectedText = decoded;" + newline +
+                "            } catch { /* Invalid UTF-8 remains a binary attachment. */ }" + newline +
+                "        }" + newline +
+                "        if (detectedText !== null || isTextMimeType(attachmentMime, filename)) {" + newline +
+                "            const textContent = detectedText !== null ? detectedText : genericAttachmentFile.buffer.toString(\"utf-8\");" + newline +
+                "            await submitPrompt(`--- Content of ${filename} ---\\n${textContent}\\n--- End of file ---\\n\\n${caption}`, [], doc.file_size || genericAttachmentFile.buffer.length);" + newline +
+                "            return;" + newline +
+                "        }" + newline +
+                "        const directMediaType = attachmentMime !== \"application/octet-stream\";" + newline +
+                "        if (directMediaType) {" + newline +
+                "            const attachmentDataUri = toDataUri(genericAttachmentFile.buffer, attachmentMime);" + newline +
+                "            await submitPrompt(caption, [{ type: \"file\", mime: attachmentMime, filename, url: attachmentDataUri }], doc.file_size || genericAttachmentFile.buffer.length);" + newline +
+                "            return;" + newline +
+                "        }" + newline +
+                "        const activeProject = getCurrentProject();" + newline +
+                "        if (!activeProject?.worktree) { await ctx.reply(t(\"bot.project_not_selected\")); return; }" + newline +
+                "        const attachmentDirectory = path.join(activeProject.worktree, \".opencode-telegram-attachments\");" + newline +
+                "        await mkdir(attachmentDirectory, { recursive: true });" + newline +
+                "        const safeFilename = path.basename(filename).replace(/[<>:\\\"\\\\|?*\\x00-\\x1f]/g, \"_\") || \"document\";" + newline +
+                "        const storedFilename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeFilename}`;" + newline +
+                "        const storedPath = path.join(attachmentDirectory, storedFilename);" + newline +
+                "        await writeFile(storedPath, genericAttachmentFile.buffer);" + newline +
+                "        const relativePath = path.relative(activeProject.worktree, storedPath).split(path.sep).join(\"/\");" + newline +
+                "        const attachmentPrompt = `${caption.trim()}\\n\\nTelegram 附件已原样保存到当前项目文件：${relativePath}。该格式没有通过 OpenCode 的直接附件类型识别，请用可用的本地文件/命令工具读取并分析；若格式需要解析器，请尝试本机已有工具。`;" + newline +
+                "        await submitPrompt(attachmentPrompt.trim(), [], doc.file_size || genericAttachmentFile.buffer.length);" + newline +
                 "        return;" + newline +
                 "        if (isTextMimeType(mimeType, filename)) {";
+            string importsAnchor = "import { config } from \"../../config.js\";";
+            string importsReplacement = importsAnchor + newline +
+                "import { mkdir, writeFile } from \"node:fs/promises\";" + newline +
+                "import path from \"node:path\";" + newline +
+                "import { getCurrentProject } from \"../../app/stores/settings-store.js\";";
+            if (content.IndexOf(importsAnchor, StringComparison.Ordinal) < 0)
+            {
+                Console.WriteLine("[文件] 当前 Bot 文档处理器缺少预期导入位置，无法启用项目内附件读取。");
+                return false;
+            }
             if (content.IndexOf(anchor, StringComparison.Ordinal) < 0)
             {
                 Console.WriteLine("[文件] 当前 Bot 文档处理器结构已变化，无法安全接入通用文件转交。");
                 return false;
             }
+            content = content.Replace(importsAnchor, importsReplacement);
             string backupPath = documentHandlerPath + ".opencode-all-files-original";
             if (!File.Exists(backupPath)) File.Copy(documentHandlerPath, backupPath, false);
             File.WriteAllText(documentHandlerPath, content.Replace(anchor, replacement), new UTF8Encoding(false));
-            Console.WriteLine("[文件] 已启用所有后缀文档的 OpenCode 附件转交。");
+            Console.WriteLine("[文件] 已启用已知类型直接发送、未知文本检测及未知二进制文件本地读取。");
             return true;
         }
         catch (Exception ex)

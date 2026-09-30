@@ -11,3 +11,9 @@ tailscale-setup-*.msi
 # Temporary editor/build artifacts
 *.tmp
 *.bak
+desktop/.build/
+desktop/artifacts/
+desktop/OpenCodeTelegram.exe
+desktop/BundleBotRuntime.zip
+bot/node_modules/
+bot/dist/

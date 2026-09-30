@@ -7,7 +7,7 @@ The desktop Bot fork and the customized Telegram Android client remain separate 
 | Component | Source | Current version |
 |---|---|---|
 | Windows WPF app, CLI, and Bot fork | this repository | Desktop 1.0.0; Bot fork 1.0.0 |
-| Android Telegram client | `E:\opencode\Telegram-master` | EOT10 `android-eot10-v11.0.21`; APK 12.10.7 / code 71029; Saved Messages #21942 |
+| Android Telegram client | `E:\opencode\Telegram-master` | EOT10 `android-eot10-v11.0.22`; APK 12.10.8 / code 71039; Saved Messages #22007 |
 
 ## Runtime connection
 

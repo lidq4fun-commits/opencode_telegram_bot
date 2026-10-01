@@ -71,6 +71,7 @@ function resetFakeClient(): void {
     }
   };
   reset(fake.client as unknown as Record<string, unknown>);
+  fake.client.session.prompt.mockResolvedValue({ id: "msg-user" });
   fake.client.session.get.mockResolvedValue(SESSION);
   fake.client.skill.list.mockResolvedValue({ data: [] });
 }
@@ -152,8 +153,6 @@ describe("opencode/v2/client", () => {
   });
 
   it("switches the session model before admitting a prompt with queue delivery", async () => {
-    fake.client.session.prompt.mockResolvedValue({ id: "msg-user" });
-
     const result = await createClient().session.promptAsync({
       sessionID: "ses-1",
       agent: "build",

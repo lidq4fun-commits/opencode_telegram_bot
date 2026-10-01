@@ -137,7 +137,6 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
     baseUrl: options.baseUrl,
     ...(options.headers ? { headers: options.headers } : {}),
   });
-
   // Replies to V2 forms and permissions need the session and, for forms, the fields;
   // both are learned from the lists and the event stream.
   const forms = new Map<string, FormInfo>();
@@ -181,12 +180,13 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
       params.variant,
     );
     const { text, files } = toV2PromptInput(params.parts);
-    return client.session.prompt({
+    const admitted = await client.session.prompt({
       sessionID: params.sessionID,
       text: params.system ? `${params.system}\n\n${text}` : text,
       ...(files.length > 0 ? { files } : {}),
       delivery: params.delivery ?? "queue",
     });
+    return { id: admitted.id };
   }
 
   async function listMessages(sessionID: string, limit?: number) {

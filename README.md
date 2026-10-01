@@ -1,20 +1,22 @@
-# OpenCode Telegram Desktop
+# opencode_telegram_bot
 
-OpenCode Telegram is an independent Windows desktop product and Bot fork. The self-extracting setup embeds the Bot source, compiled Bot, production Node dependencies, Node.js runtime, npm runtime, and the WPF desktop application. Installed builds do not install or call `@grinev/opencode-telegram-bot` from npm.
+OpenCode Telegram is an independent Windows desktop product and Bot fork. The Windows ZIP distribution contains a setup program, README, and `Dependencies` folder with the Bot source, compiled Bot, production Node dependencies, Node.js runtime, and npm runtime. Installed builds do not install or call `@grinev/opencode-telegram-bot` from npm.
 
 ## Features
 
-- **Apple-inspired WPF interface:** control center, Telegram Bot binding, EOT10 encryption, OpenCode engine selection, and startup options.
+- **Windows-native WPF interface:** control center, Telegram Bot binding, EOT10 encryption, OpenCode engine selection, and startup options.
 - **Independent Bot runtime:** forked TypeScript Bot and Node are installed together; the system does not need a global Telegram Bot npm package.
 - **OpenCode choice:** connect to an existing local/remote OpenCode server, or install a local OpenCode engine from the GUI or CLI.
 - **EOT10:** encrypts authorized private-chat text, Rich Message text, media attachments, and media groups. Bot token, OpenCode credentials, and EOT10 password are stored together in a file protected by Windows CurrentUser DPAPI.
 - **Dual control surface:** GUI and CLI use the same settings and service manager.
-- **Windows sign-in startup:** enable or disable through the GUI or CLI.
+- **Windows sign-in startup:** separately enable starting the desktop app and starting the Bot from the GUI.
+- **Windows installation integration:** Start menu and desktop shortcuts plus an Apps & Features uninstall entry.
+- **Bilingual desktop UI:** switch between Simplified Chinese and English from the window toolbar.
 - **Attachment routing:** recognized attachment MIME types go directly to OpenCode; text-like files are submitted as text; an unknown MIME with valid UTF-8 content is detected as text; only unknown binary files are saved byte-for-byte into the current project for local agent tools.
 
-## Build the setup EXE
+## Build the Windows ZIP package
 
-Build prerequisites: Windows .NET Framework C# compiler, Node.js 24 x64 with npm, and installed Bot development dependencies. The build script creates a clean staging directory, prunes dev-only Node packages, bundles Node/npm and Bot production dependencies, then emits the setup executable.
+Build prerequisites: Windows .NET Framework C# compiler, Node.js 24 x64 with npm, and installed Bot development dependencies. The build script creates a clean staging directory, prunes dev-only Node packages, bundles Node/npm and Bot production dependencies, then emits a ZIP containing the setup executable, README, and `Dependencies\BotRuntime.zip`.
 
 ```powershell
 & 'E:\opencode\encrypted_telegram_opencode_bot\desktop\Build-Desktop-Package.ps1'
@@ -23,24 +25,24 @@ Build prerequisites: Windows .NET Framework C# compiler, Node.js 24 x64 with npm
 Output:
 
 ```text
-desktop\artifacts\OpenCodeTelegram-Setup-1.0.0.exe
-Size: 77,143,552 bytes
-SHA-256: A388A1BD3F634CFFE55A93091D820F438B01F94BF8C994CBED888CA2EB870708
+desktop\artifacts\OpenCodeTelegram-1.0.0-Windows-x64.zip
 ```
 
 Before binding the same Telegram Bot token in the fork for the first time, stop the legacy v11 launcher/daemon to avoid two polling clients using one token. The new installer does not import the legacy `.env` or DPAPI configuration.
 
-The setup EXE embeds a compressed runtime archive. Installing extracts the independent Bot source/runtime and places `OpenCodeTelegram.exe` plus `opencode-telegram.cmd` in the selected installation folder. For a clean build, run `npm ci` in `bot/` first; `Build-Desktop-Package.ps1` prunes dev dependencies only in a staging copy.
+The setup EXE reads the compressed runtime archive from the package's `Dependencies` folder. Installing extracts the independent Bot source/runtime and places `OpenCodeTelegram.exe` plus `opencode-telegram.cmd` in the selected installation folder. For a clean build, run `npm ci` in `bot/` first; `Build-Desktop-Package.ps1` prunes dev dependencies only in a staging copy.
 
 ## First run
 
-1. Run the setup EXE and select an installation folder.
-2. Optionally check **Start Bot at Windows sign-in**.
-3. Launch **OpenCode Telegram** from the Start menu shortcut.
+1. Extract the ZIP package, keeping its `Dependencies` folder alongside the setup EXE.
+2. Run the setup EXE and select an installation folder.
+3. Setup only installs the app. On the completion page, select **Launch opencode_telegram_bot now** if desired, or click **Finish** to exit; later, open it from the desktop or Start menu shortcut. Uninstall from Windows **Installed apps** or a compatible uninstall manager.
 4. In **机器人账号**, bind a BotFather token and the allowed Telegram user ID.
 5. In **加密设置**, choose EOT10 and set a password of at least 12 characters. Use the same password for this Bot in the Android client.
-6. In **OpenCode 引擎**, select an existing server or choose **安装 OpenCode**. Configure the server API URL and model provider/model ID.
+6. In **OpenCode 引擎**, select an existing server or choose the separate **Install OpenCode (API v1)** or **Install OpenCode (API v2)** action. V1 installs `opencode-ai@^1`; V2 installs `@opencode/cli@^2`. The two CLI versions are kept in separate folders. The app checks Node.js and Bun prerequisites and installs missing dependencies at user scope when needed. Configure the server URL; a server password is optional and only needed when authentication is enabled.
 7. Press **启动机器人** from **概览**.
+
+When the Bot service starts, the app first stops all local `opencode` processes, then starts the CLI matching the selected API version. Install that API version from **OpenCode 引擎** first.
 
 The app starts with fresh configuration; it does not import old npm-Bot `.env` or legacy DPAPI files. The setup registers these per-user environment variables and adds its CLI directory to the user PATH:
 

@@ -14,6 +14,10 @@ $runtimeRoot = Join-Path $bundleRoot 'runtime'
 $artifactRoot = Join-Path $PSScriptRoot 'artifacts'
 $bundleZip = Join-Path $stageRoot 'BotRuntime.zip'
 $setupExe = Join-Path $artifactRoot "OpenCodeTelegram-Setup-$Version.exe"
+$releaseRoot = Join-Path $stageRoot 'release'
+$releaseDependencies = Join-Path $releaseRoot 'Dependencies'
+$releaseZip = Join-Path $artifactRoot "OpenCodeTelegram-$Version-Windows-x64.zip"
+$readmeSource = Join-Path $PSScriptRoot 'README-Installer.md'
 $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $wpf = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF'
 $icon = Join-Path $repoRoot 'OpenCodeTelegramLauncher.ico'
@@ -24,7 +28,8 @@ foreach ($required in @(
     (Join-Path $NodeHome 'node.exe'),
     (Join-Path $NodeHome 'node_modules\npm\bin\npm-cli.js'),
     $csc,
-    $icon
+    $icon,
+    $readmeSource
 )) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Required build input is missing: $required" }
 }
@@ -70,6 +75,8 @@ $appArgs = @(
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
     "/reference:$wpf\WindowsBase.dll", "/reference:$wpf\PresentationCore.dll", "/reference:$wpf\PresentationFramework.dll",
     '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll',
+    '/reference:System.Management.dll',
+    '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
     (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs')
 )
@@ -87,16 +94,24 @@ try {
 if (Test-Path -LiteralPath $bundleZip) { Remove-Item -LiteralPath $bundleZip -Force }
 Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $bundleZip -CompressionLevel Optimal
 $setupArgs = @(
-    '/nologo', '/target:winexe', '/optimize+', "/out:$setupExe", "/win32icon:$icon",
-    ("/resource:" + $bundleZip + ",BotRuntime.zip"),
+    '/nologo', '/target:winexe', '/optimize+', '/define:SETUP_BUILD', "/out:$setupExe", "/win32icon:$icon",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
     "/reference:$wpf\WindowsBase.dll", "/reference:$wpf\PresentationCore.dll", "/reference:$wpf\PresentationFramework.dll",
     '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll',
+    '/reference:System.Management.dll',
+    '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
     (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs')
 )
 & $csc @setupArgs
 if ($LASTEXITCODE -ne 0) { throw "Self-extracting setup compilation failed with exit code $LASTEXITCODE." }
 
-Get-Item -LiteralPath $setupExe | Format-List FullName, Length
-Get-FileHash -LiteralPath $setupExe -Algorithm SHA256 | Format-List Hash
+New-Item -ItemType Directory -Path $releaseDependencies -Force | Out-Null
+Copy-Item -LiteralPath $setupExe -Destination (Join-Path $releaseRoot (Split-Path -Leaf $setupExe)) -Force
+Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $releaseRoot 'README.md') -Force
+Copy-Item -LiteralPath $bundleZip -Destination (Join-Path $releaseDependencies 'BotRuntime.zip') -Force
+if (Test-Path -LiteralPath $releaseZip) { Remove-Item -LiteralPath $releaseZip -Force }
+Compress-Archive -Path (Join-Path $releaseRoot '*') -DestinationPath $releaseZip -CompressionLevel Optimal
+
+Get-Item -LiteralPath $releaseZip, $setupExe | Format-Table FullName, Length -AutoSize
+Get-FileHash -LiteralPath $releaseZip -Algorithm SHA256 | Format-List Hash

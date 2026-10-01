@@ -9,8 +9,9 @@ runtime. Installed builds do not run `npm install -g @grinev/opencode-telegram-b
 and do not patch an upstream installation.
 
 The fork adds EOT10 text, rich-message, and media protection; hybrid direct/local
-attachment handling; and an Apple-inspired Windows desktop application with
-DPAPI-protected setup, CLI controls, and optional Windows sign-in startup.
+attachment handling; and a Windows-native desktop application with
+DPAPI-protected settings, CLI controls, selectable OpenCode v1/v2 APIs, Chinese
+and English UI, and optional Windows sign-in startup.
 
 ## Development layout
 

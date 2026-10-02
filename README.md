@@ -1,8 +1,8 @@
 # opencode_telegram_bot
 
-OpenCode Telegram is an independent Windows desktop product and Bot fork. The Windows ZIP distribution contains a standalone setup program and README. The setup EXE embeds the Bot source, compiled Bot, production Node dependencies, Node.js runtime, and npm runtime; installed builds do not install or call `@grinev/opencode-telegram-bot` from npm.
+OpenCode Telegram is an independent Windows desktop product and Bot fork. The Windows ZIP distribution contains a standalone setup program and README. The setup EXE embeds the compiled Bot, production Node dependencies, Node/npm runtime and offline core dependencies; installed builds do not install or call `@grinev/opencode-telegram-bot` from npm. Developer sources, tests, secrets and local state are excluded from the installed runtime payload.
 
-Target machines: 64-bit Windows 10/11. The installer carries Node.js/npm for the Bot; the desktop host uses the .NET Framework/WPF runtime supplied by supported Windows releases. Local OpenCode engine packages are downloaded when selected.
+Target machines: Windows 10 version 1809 or later / Windows 11 x64 with .NET Framework 4.6.2+ and WPF. The installer carries Node/npm, OpenCode V1/V2, Bun, Portable Git and WebView2. Compatible existing tools are preferred; missing tools use the app-local payload without core dependency downloads. Telegram, cloud models, optional plugins and task-specific packages may still require internet access.
 
 ## Features
 
@@ -40,8 +40,8 @@ The standalone setup EXE embeds the compressed runtime archive. Installing extra
 2. Setup only installs the app. On the completion page, select **Launch opencode_telegram_bot now** if desired, or click **Finish** to exit; later, open it from the desktop or Start menu shortcut. Uninstall from Windows **Installed apps** or a compatible uninstall manager.
 3. In **机器人账号**, bind a BotFather token and the allowed Telegram user ID.
 4. In **加密设置**, choose EOT10 and set a password of at least 12 characters. Use the same password for this Bot in the Android client.
-5. In **OpenCode 引擎**, select an existing server or choose the separate **Install OpenCode (API v1)** or **Install OpenCode (API v2)** action. V1 installs `opencode-ai@^1`; V2 installs `@opencode/cli@^2`. The two CLI versions are kept in separate folders. The app checks Node.js and Bun prerequisites and installs missing dependencies at user scope when needed. V2 requires a server password. For a local V2 service, the app generates and DPAPI-protects one automatically; for an existing server, enter its password in the engine settings.
-   Local engine installation requires internet access. If V2's Bun runtime is missing, the app downloads and SHA-256 verifies the official Windows x64 release and installs it under the current user's app-data folder; WinGet is only a fallback. Bun requires Windows 10 version 1809 or later.
+5. In **OpenCode 引擎**, select an existing server or choose the separate **Install OpenCode (API v1)** or **Install OpenCode (API v2)** action. Both CLI series are kept in separate folders and can use existing compatible tools or the complete offline payload. V2 requires a server password. For a local V2 service, the app generates and DPAPI-protects one automatically; for an existing server, enter its password in the engine settings.
+   Complete desktop packages select compatible existing V1/V2 engines or the packaged baseline binaries without npm installation. Existing Node is reused only after architecture, native ABI and SQLite loading checks; compatible existing Bun/Git and installed WebView2 are preferred. Missing dependencies fall back to private app-local copies, without replacing system tools. Online dependency installation remains only as a fallback for legacy/source-only installations without the complete payload. See `desktop/README-Installer.md` and `desktop/OfflineDependencies.json` for dependency versions and build preparation.
 6. Press **启动机器人** from **概览**.
 7. Use **启动与 CLI** to run `opencode_telegram_bot`'s own management commands. **OpenCode Web** starts the selected version's web service, displays it in-app, and can open it in the default browser.
 

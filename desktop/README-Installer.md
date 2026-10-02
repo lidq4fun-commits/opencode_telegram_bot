@@ -3,7 +3,7 @@
 OpenCode 安装与启动器，可通过 Telegram 远程控制，并支持加密通信。
 An OpenCode installer and launcher with remote control via Telegram and encrypted communications.
 
-Supported target: 64-bit Windows 10/11. The installer includes Node.js/npm for the Bot; Windows supplies the .NET Framework/WPF desktop runtime. V2 local-engine setup downloads Bun on demand when it is absent.
+Supported target: Windows 10 version 1809 or later / Windows 11, x64, with .NET Framework 4.6.2 or later and WPF. The installer includes the Bot, Node/npm, OpenCode V1/V2 baseline engines, Bun baseline, Portable Git and a fixed WebView2 runtime. Core runtime setup does not require downloads.
 
 ## Install
 
@@ -15,11 +15,13 @@ The **Startup & CLI** page runs the desktop application's own `opencode-telegram
 
 When the Bot service starts, the app stops all local `opencode` processes first, then starts the OpenCode CLI matching the selected API version. For V2, it writes the DPAPI-generated password into the selected CLI's managed service configuration, starts that service through `opencode service start`, discovers the URL returned by the running service, and verifies authenticated `/api/info` before launching the Bot. The Bot and Web page use that discovered URL and the same service-managed password. Install the selected API version from **OpenCode Engine** before starting.
 
-The **OpenCode Engine** page keeps the API version selector up front; connection details, scanning, installation, and other options are under the collapsed **Advanced settings** section. Scanning checks process executables, process/user/system `PATH`, npm and Bun global package locations, common Windows install locations, Windows app-path/uninstall registry entries, and the app's own engine folders. It lists every detected OpenCode 1.x/2.x installation so the exact CLI/API pairing can be selected. The app uses its bundled Node.js; if that runtime is unexpectedly missing it tries a user-scope WinGet install. Missing Bun is downloaded from the official release and SHA-256 verified, with WinGet as fallback. V2 requires a server password: local services get a generated DPAPI-protected password, while existing servers require their password in the connection settings. Uninstall completely stops the app-managed engine process tree and removes that API's entire app-managed installation folder; it deliberately leaves global OpenCode installations alone. Installation shows an in-page progress message and a success or failure dialog with the detected CLI version. If the selected CLI is missing or has the wrong API version, starting the Bot opens this page and explains which install button to use.
+The **OpenCode Engine** page keeps the API version selector up front; connection details, scanning, installation, and other options are under the collapsed **Advanced settings** section. Scanning checks process executables, process/user/system `PATH`, npm and Bun global package locations, common Windows install locations, Windows app-path/uninstall registry entries, and the app's own engine folders. Compatible existing engines matching the selected API major version are preferred; otherwise the packaged engine is used. Explicitly selected external engines are retained. V2 requires a server password: local services get a generated DPAPI-protected password, while existing servers require their password in the connection settings. Uninstall removes only engines previously installed into the app-managed user-data engine folder; it does not uninstall external tools or separately remove engines shipped as part of the app.
 
-The installer embeds the standalone Bot, its production Node dependencies, and the bundled Node/npm runtime; installing does not require a preinstalled Node/npm or internet access for the Bot runtime. It creates `Uninstall.exe` and registers its interactive and quiet uninstall commands under the current user's Windows uninstall registry key, so Windows Apps & Features and tools such as Geek Uninstaller can discover the app. The API v1 button installs `opencode-ai@^1`; the API v2 button installs `@opencode/cli@^2`. They are installed into separate directories so both CLI series can coexist. Installing an OpenCode CLI requires internet access.
+The installer embeds the complete core runtime payload. It creates `Uninstall.exe` and registers its interactive and quiet uninstall commands under the current user's Windows uninstall registry key. The API v1/v2 installation buttons select a compatible local engine or the corresponding packaged engine without invoking npm downloads when the complete payload is present. Both series coexist in separate app-local folders. Legacy source-only installations without the offline payload retain the online installation fallback.
 
-V2 local-engine installation also needs Bun. When Bun is missing, the app downloads the current Windows x64 release from the official Bun GitHub release, verifies its SHA-256 digest, and installs it under the current user's app-data folder. WinGet is a fallback if the official download is unavailable. Bun requires Windows 10 version 1809 or later. Local engine installation requires internet access; if internet access is unavailable, connect to an existing OpenCode server instead.
+Existing Bun >=1.3 and Git >=2.30 are preferred when their version probes succeed; otherwise the app-local copies are used. Existing Node >=24 is reused only when it is x64, matches the bundled native ABI and can actually load the packaged SQLite module. The installed evergreen WebView2 runtime is preferred; when none is installed the fixed app-local runtime is used. No system Node/Git/Bun installation is replaced, and no machine PATH or registry configuration is changed for these tools.
+
+Telegram messaging, cloud model APIs, provider authorization, updates and task-specific downloads still require internet access. Local model weights, optional OpenCode plugins, external language servers, project packages and tools requested by model tasks are not included. This is an offline core-dependency installation package, not a guarantee that every AI workflow can run offline. The .NET/WPF runtime remains an operating-system prerequisite.
 
 The release ZIP contains the standalone setup EXE and this README. The EXE may be copied or run by itself.
 
@@ -27,10 +29,10 @@ The release ZIP contains the standalone setup EXE and this README. The EXE may b
 
 - `OpenCodeTelegram-Setup-<version>.exe` — Windows installer.
 - `README.md` — these instructions.
-- Bundled inside setup: Bot, production dependencies, and Node/npm runtime.
-# 桌面开发依赖（不打包）
+- Bundled inside setup: Bot, production dependencies, Node/npm, OpenCode V1/V2, Bun, Git, WebView2 SDK and fixed runtime, dependency licenses, source metadata and SHA256 file inventory.
+## Desktop build dependencies
 
-内嵌 OpenCode 网页使用 Edge WebView2，不再使用 IE 内核。运行机器需要 Microsoft Edge WebView2 Runtime；缺失时网页页面会提示原因，仍可使用默认浏览器。
+内嵌网页优先使用已安装的 Edge WebView2 Runtime；未安装时使用包内固定运行时，不再要求另行下载。
 
 编译前从 NuGet 官方源获取 `Microsoft.Web.WebView2` `1.0.4258.31`，运行：
 
@@ -39,6 +41,8 @@ The release ZIP contains the standalone setup EXE and this README. The EXE may b
 ```
 
 此命令只提取 SDK 到被 Git 忽略的 `desktop/dependencies/webview2`，不会构建安装包。打包脚本会携带 Core、WPF 和 x64 Loader DLL。
+
+`desktop/OfflineDependencies.json` records pinned official archive URLs and verification information. Download those archives with visible progress into `desktop/dependencies/archives`, save the official OpenCode and Bun license files under `desktop/dependencies/offline/licenses`, then run `desktop/Restore-OfflineDependencies.ps1`. Git/Bun/npm archives are checked against publisher digests; the extracted WebView2 executable must have a valid Microsoft signature. The build refuses an incomplete core payload. Binary dependencies and download artifacts remain Git-ignored; Git tracks the restore/build scripts, versions and tests.
 
 “启动设置”与“Bot CLI”是独立页面。Bot CLI 支持回车执行、上下键历史、交互隐藏输入和停止当前命令；页面列出实际支持的命令与配置键。网页页面进入后自动连接远程服务或启动本机服务，不需要再点击启动。
 
@@ -61,4 +65,5 @@ The release ZIP contains the standalone setup EXE and this README. The EXE may b
 ```powershell
 .\desktop\tests\Test-TelegramWebContext.ps1 -AssemblyPath <新源码编译的OpenCodeTelegram.exe路径>
 .\desktop\tests\Test-BrowserLogin.ps1 -AssemblyPath <新源码编译的OpenCodeTelegram.exe路径>
+.\desktop\tests\Test-OfflineDependencies.ps1 -AssemblyPath <完整暂存包中的OpenCodeTelegram.exe路径>
 ```

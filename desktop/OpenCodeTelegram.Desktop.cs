@@ -224,13 +224,14 @@ sealed class BunReleaseAsset
 static class ProductPaths
 {
     public const string AppName = "opencode_telegram_bot";
+    public static string Version { get { return System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString(3); } }
     public const string EnvRoot = "OPENCODE_TELEGRAM_ROOT";
     public const string EnvHome = "OPENCODE_TELEGRAM_HOME";
     public static string Root { get { return Environment.GetEnvironmentVariable(EnvRoot) ?? AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar); } }
     public static string Home { get { return Environment.GetEnvironmentVariable(EnvHome) ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenCodeTelegram"); } }
     public static string SettingsFile { get { return Path.Combine(Home, "desktop-settings.dpapi"); } }
     public static string BotCli { get { return Path.Combine(Root, "bot", "dist", "cli.js"); } }
-    public static string Node { get { return Path.Combine(Root, "runtime", "node.exe"); } }
+    public static string Node { get { return BotRuntime.ResolveNodeExecutable(); } }
     public static string NpmCli { get { return Path.Combine(Root, "runtime", "node_modules", "npm", "bin", "npm-cli.js"); } }
     public static string BotModulesBin { get { return Path.Combine(Root, "bot", "node_modules", ".bin"); } }
 }
@@ -268,6 +269,59 @@ static class SettingsStore
 
 static class BotRuntime
 {
+    static readonly Dictionary<string,string> dependencyCache=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+    public static string OfflineRoot { get { return Path.Combine(ProductPaths.Root,"dependencies"); } }
+    public static void ConfigureFixedWebViewPermissions(string installRoot)
+    {
+        string folder=Path.Combine(installRoot,"dependencies","webview2");
+        if(!Directory.Exists(folder))return;
+        // Fixed WebView2's Windows 10 sandbox requires read/execute access for
+        // application packages. These grants affect only the app-local runtime.
+        var info=new ProcessStartInfo{FileName=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"icacls.exe"),Arguments="\""+folder+"\" /grant *S-1-15-2-1:(OI)(CI)(RX) *S-1-15-2-2:(OI)(CI)(RX) /T /Q",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+        using(var process=Process.Start(info))
+        {
+            var stdout=process.StandardOutput.ReadToEndAsync();var stderr=process.StandardError.ReadToEndAsync();
+            if(!process.WaitForExit(60000)){try{process.Kill();}catch{}throw new TimeoutException("Fixed WebView2 permissions setup timed out.");}
+            Task.WaitAll(stdout,stderr);
+            if(process.ExitCode!=0)throw new IOException("Fixed WebView2 permissions setup failed: "+stderr.Result);
+        }
+    }
+    static string CompatibleTool(string executable,Version minimum)
+    {
+        if(String.IsNullOrWhiteSpace(executable)||!File.Exists(executable))return "";
+        try
+        {
+            var match=Regex.Match(RunAndReadOutput(executable,"--version",5000),@"\d+\.\d+(?:\.\d+)?");
+            Version version;
+            return match.Success&&Version.TryParse(match.Value,out version)&&version>=minimum?executable:"";
+        }
+        catch{return "";}
+    }
+    static string ResolveGitExecutable()
+    {
+        string key="git:"+ProductPaths.Root;
+        lock(dependencyCache)
+        {
+            string selected;if(dependencyCache.TryGetValue(key,out selected))return selected;
+            var candidates=GetSearchPathEntries().Select(directory=>Path.Combine(directory,"git.exe")).Concat(new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Git","cmd","git.exe"),Path.Combine(OfflineRoot,"git","cmd","git.exe")});
+            selected=candidates.Select(candidate=>CompatibleTool(candidate,new Version(2,30))).FirstOrDefault(candidate=>!String.IsNullOrEmpty(candidate))??"";
+            dependencyCache[key]=selected;return selected;
+        }
+    }
+    public static string ResolveWebViewRuntime()
+    {
+        try
+        {
+            string available=Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();
+            if(ParseOpenCodeVersion(available)>=new Version(154,0,4258))return null;
+        }
+        catch(Microsoft.Web.WebView2.Core.WebView2RuntimeNotFoundException)
+        {
+        }
+        string folder=Path.Combine(OfflineRoot,"webview2");
+        if(!File.Exists(Path.Combine(folder,"msedgewebview2.exe")))throw new FileNotFoundException("Bundled WebView2 runtime is missing or installed runtime is too old.");
+        return folder;
+    }
     const string DefaultV1ApiUrl = "http://127.0.0.1:4096";
     const string DefaultV2ApiUrl = "http://127.0.0.1:49374";
     static string DefaultApiUrl(string version) { return version == "v2" ? DefaultV2ApiUrl : DefaultV1ApiUrl; }
@@ -289,17 +343,40 @@ static class BotRuntime
         if(!String.IsNullOrWhiteSpace(configured))
         {
             bool isManaged=configured.StartsWith(engineRoot+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
-            if(isManaged) return File.Exists(selected)?selected:"";
-            if(File.Exists(configured)) return configured;
+            string offlineEngineRoot=Path.GetFullPath(Path.Combine(OfflineRoot,"opencode"))+Path.DirectorySeparatorChar;
+            if(configured.StartsWith(offlineEngineRoot,StringComparison.OrdinalIgnoreCase))
+            {
+                string packaged=Path.Combine(OfflineRoot,"opencode",version,"opencode.exe");
+                return File.Exists(packaged)?packaged:"";
+            }
+            if(isManaged&&File.Exists(selected)) return selected;
+            if(!isManaged&&File.Exists(configured)) return configured;
         }
-        return File.Exists(selected)?selected:"";
+        if(File.Exists(selected))return selected;
+        string bundled=Path.Combine(OfflineRoot,"opencode",version,"opencode.exe");
+        if(!File.Exists(bundled))return "";
+        string key="opencode:"+ProductPaths.Root+":"+ProductPaths.Home+":"+version;
+        lock(dependencyCache)
+        {
+            string existing;
+            if(!dependencyCache.TryGetValue(key,out existing))
+            {
+                try { existing=ScanOpenCodeInstallations(settings).Where(item=>item.ApiVersion==version).Select(item=>item.Executable).FirstOrDefault()??bundled; }
+                catch { existing=bundled; }
+                dependencyCache[key]=existing;
+            }
+            return existing;
+        }
     }
     public static string BuildOpenCodePath(DesktopSettings settings,string executableOverride=null)
     {
         string executable=String.IsNullOrWhiteSpace(executableOverride)?ResolveOpenCodeExecutable(settings):executableOverride;
         string executableDirectory=String.IsNullOrWhiteSpace(executable)?"":Path.GetDirectoryName(executable);
         string bun=ResolveBunExecutable();string bunDirectory=String.IsNullOrWhiteSpace(bun)?"":Path.GetDirectoryName(bun);
-        return ProductPaths.BotModulesBin+Path.PathSeparator+executableDirectory+Path.PathSeparator+bunDirectory+Path.PathSeparator+Path.GetDirectoryName(ProductPaths.Node)+Path.PathSeparator+(Environment.GetEnvironmentVariable("PATH")??"");
+        string git=ResolveGitExecutable();string gitDirectory=String.IsNullOrWhiteSpace(git)?"":Path.GetDirectoryName(git);
+        string gitBash=String.IsNullOrWhiteSpace(gitDirectory)?"":Path.GetFullPath(Path.Combine(gitDirectory,"..","bin"));
+        if(!File.Exists(Path.Combine(gitBash,"bash.exe")))gitBash="";
+        return ProductPaths.BotModulesBin+Path.PathSeparator+executableDirectory+Path.PathSeparator+bunDirectory+Path.PathSeparator+Path.GetDirectoryName(ProductPaths.Node)+Path.PathSeparator+gitDirectory+Path.PathSeparator+gitBash+Path.PathSeparator+(Environment.GetEnvironmentVariable("PATH")??"");
     }
     static string ReadOpenCodeVersion(DesktopSettings settings,string executableOverride=null)
     {
@@ -739,19 +816,44 @@ static class BotRuntime
         }
         return "";
     }
-    static string ResolveNodeExecutable()
+    public static string ResolveNodeExecutable()
     {
-        if(File.Exists(ProductPaths.Node)) return ProductPaths.Node;
-        return FindOnPath("node.exe");
+        string bundled=Path.Combine(ProductPaths.Root,"runtime","node.exe");
+        string key="node:"+ProductPaths.Root;
+        lock(dependencyCache)
+        {
+            string selected;if(dependencyCache.TryGetValue(key,out selected))return selected;
+            selected=bundled;
+            try
+            {
+                Directory.CreateDirectory(ProductPaths.Home);
+                string abi=RunAndReadOutput(bundled,"-p process.versions.modules",5000);
+                string module=Path.Combine(ProductPaths.Root,"bot","node_modules","better-sqlite3").Replace("\\","/").Replace("'","\\'");
+                foreach(string candidate in GetSearchPathEntries().Select(directory=>Path.Combine(directory,"node.exe")))
+                {
+                    if(String.IsNullOrEmpty(CompatibleTool(candidate,new Version(24,0))))continue;
+                    try
+                    {
+                        string probe="if(process.arch!=='x64')process.exit(2);const D=require('"+module+"');const db=new D(':memory:');db.prepare('select 1').get();db.close();console.log(process.versions.modules)";
+                        if(RunAndReadOutput(candidate,"-e \""+probe+"\"",5000)==abi){selected=candidate;break;}
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            dependencyCache[key]=selected;return selected;
+        }
     }
     static string ResolveBunExecutable()
     {
-        string bundled=Path.Combine(ProductPaths.Home,"dependencies","bun","bun.exe");
-        if(File.Exists(bundled)) return bundled;
-        string found=FindOnPath("bun.exe");
-        if(!String.IsNullOrWhiteSpace(found)) return found;
-        string userBun=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".bun","bin","bun.exe");
-        return File.Exists(userBun)?userBun:"";
+        string key="bun:"+ProductPaths.Root+":"+ProductPaths.Home;
+        lock(dependencyCache)
+        {
+            string selected;if(dependencyCache.TryGetValue(key,out selected)&&File.Exists(selected))return selected;
+            var candidates=GetSearchPathEntries().Select(directory=>Path.Combine(directory,"bun.exe")).Concat(new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".bun","bin","bun.exe"),Path.Combine(ProductPaths.Home,"dependencies","bun","bun.exe"),Path.Combine(OfflineRoot,"bun","bun.exe")});
+            selected=candidates.Select(candidate=>CompatibleTool(candidate,new Version(1,3))).FirstOrDefault(candidate=>!String.IsNullOrEmpty(candidate))??"";
+            dependencyCache[key]=selected;return selected;
+        }
     }
     static string RunWingetInstall(string packageId)
     {
@@ -1050,6 +1152,17 @@ static class BotRuntime
     {
         if(apiVersion!="v1"&&apiVersion!="v2") throw new ArgumentException("OpenCode API version must be v1 or v2.","apiVersion");
         Directory.CreateDirectory(ProductPaths.Home);
+        string bundled=Path.Combine(OfflineRoot,"opencode",apiVersion,"opencode.exe");
+        if(File.Exists(bundled))
+        {
+            EnsureOpenCodeDependencies(apiVersion,progress,settings.Locale=="en");
+            OpenCodeInstallation existing=null;
+            try { existing=ScanOpenCodeInstallations(settings).FirstOrDefault(item=>item.ApiVersion==apiVersion); } catch { }
+            string chosen=existing==null?bundled:existing.Executable;
+            if(ReadOpenCodeMajorVersion(ReadOpenCodeVersionFromExecutable(chosen))!=(apiVersion=="v2"?2:1))throw new InvalidOperationException("Bundled OpenCode API version mismatch.");
+            if(progress!=null)progress((settings.Locale=="en"?"Using compatible offline/local engine: ":"使用兼容的本机或包内引擎：")+chosen);
+            return chosen;
+        }
         string node=EnsureOpenCodeDependencies(apiVersion,progress,settings.Locale=="en");
         string engineHome = Path.Combine(ProductPaths.Home, "opencode-runtime", apiVersion);
         string package = apiVersion=="v2"?"@opencode/cli@^2":"opencode-ai@^1";
@@ -1128,7 +1241,7 @@ static class ProductRegistration
         {
             bool isFirstRegistration=key.GetValue("InstallDate")==null;
             key.SetValue("DisplayName", ProductPaths.AppName, RegistryValueKind.String);
-            key.SetValue("DisplayVersion", "1.0.0", RegistryValueKind.String);
+            key.SetValue("DisplayVersion", ProductPaths.Version, RegistryValueKind.String);
             key.SetValue("Publisher", ProductPaths.AppName, RegistryValueKind.String);
             key.SetValue("InstallLocation", installPath, RegistryValueKind.String);
             key.SetValue("DisplayIcon", exe, RegistryValueKind.String);
@@ -1144,7 +1257,7 @@ static class ProductRegistration
 
 static class Cli
 {
-    public const string Usage = "opencode_telegram_bot\n\n" +
+    public static readonly string Usage = "opencode_telegram_bot\n\n" +
       "Usage: opencode-telegram <command> [options]\n\n" +
       "Commands:\n" +
       "  gui                         Open the desktop control panel\n" +
@@ -1172,13 +1285,13 @@ static class Cli
       "  help                        Show this help\n\n" +
       "Configuration: GUI settings are protected using Windows CurrentUser DPAPI.\n" +
       "Environment: OPENCODE_TELEGRAM_ROOT, OPENCODE_TELEGRAM_HOME, PATH.\n" +
-      "Version: 1.0.0";
+      "Version: "+ProductPaths.Version;
     public static int Run(string[] args)
     {
         if (args.Length == 0 || args[0] == "gui") { new DesktopApp().RunGui(); return 0; }
         if (args[0] == "--uninstall") return Uninstall(args.Skip(1).Contains("--quiet"));
         if (args[0] == "help" || args[0] == "--help" || args[0] == "-h") { Console.WriteLine(Usage); return 0; }
-        if (args[0] == "version" || args[0] == "--version") { Console.WriteLine("1.0.0"); return 0; }
+        if (args[0] == "version" || args[0] == "--version") { Console.WriteLine(ProductPaths.Version); return 0; }
         if (args[0] == "configure") return Configure(args.Skip(1).ToArray());
         if (args[0] == "config" && args.Length > 1 && args[1] == "set") return SetConfig(args.Skip(2).ToArray());
         if (args[0] == "config" && args.Length > 1 && args[1] == "unset") return UnsetConfig(args.Skip(2).ToArray());
@@ -2014,7 +2127,7 @@ sealed class DesktopApp
         {
             if(browser.CoreWebView2==null)
             {
-                var environment=await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(null,Path.Combine(ProductPaths.Home,"webview2"));
+                var environment=await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(BotRuntime.ResolveWebViewRuntime(),Path.Combine(ProductPaths.Home,"webview2"));
                 if(embeddedBrowser!=browser)return;
                 await browser.EnsureCoreWebView2Async(environment);
                 if(embeddedBrowser!=browser)return;
@@ -2591,6 +2704,7 @@ sealed class InstallerWindow : Window
                         entry.ExtractToFile(output,true);
                     }
                 }
+                BotRuntime.ConfigureFixedWebViewPermissions(dest);
                 installedExe=Path.Combine(dest,"OpenCodeTelegram.exe");
                 if(!File.Exists(installedExe)) throw new FileNotFoundException("Installer payload is missing the desktop app executable.",installedExe);
                 string uninstaller=Path.Combine(dest,"Uninstall.exe");

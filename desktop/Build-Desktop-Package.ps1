@@ -6,6 +6,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$parsedVersion = [version]$Version
+if ($parsedVersion.Build -lt 0 -or $parsedVersion.Revision -gt 0) { throw 'Use a three-component release version, such as 1.0.10.' }
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $botRoot = Join-Path $repoRoot 'bot'
 $stageRoot = Join-Path $PSScriptRoot ('.build-release-' + [Guid]::NewGuid().ToString('N'))
@@ -25,6 +27,15 @@ $wpf = Join-Path $frameworkRoot 'WPF'
 $icon = Join-Path $repoRoot 'OpenCodeTelegramLauncher.ico'
 & (Join-Path $PSScriptRoot 'Restore-WebView2.ps1')
 $webViewDependencies = Join-Path $PSScriptRoot 'dependencies\webview2'
+$offlineDependencies = Join-Path $PSScriptRoot 'dependencies\offline'
+foreach ($requiredDependency in @('bun\bun.exe', 'git\cmd\git.exe', 'opencode\v1\opencode.exe', 'opencode\v2\opencode.exe', 'webview2\msedgewebview2.exe')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $offlineDependencies $requiredDependency))) {
+        throw "Complete offline payload missing: $requiredDependency. Run Restore-OfflineDependencies.ps1 with the verified official archives first."
+    }
+}
+foreach ($license in @('OpenCode-LICENSE.txt', 'Bun-LICENSE.md')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $offlineDependencies "licenses\$license"))) { throw "Offline dependency license is missing: $license" }
+}
 
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'The desktop package targets 64-bit Windows.' }
 if ([string]::IsNullOrWhiteSpace($NodeHome)) {
@@ -107,11 +118,30 @@ try {
 Copy-Item -LiteralPath $nodeExe -Destination $runtimeRoot -Force
 Copy-Item -LiteralPath (Join-Path $NodeHome 'LICENSE') -Destination $runtimeRoot -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath (Join-Path $NodeHome 'node_modules\npm') -Destination (Join-Path $runtimeRoot 'node_modules') -Recurse -Force
+foreach ($dependency in @('bun', 'git', 'opencode', 'webview2')) {
+    & robocopy.exe (Join-Path $offlineDependencies $dependency) (Join-Path $bundleRoot "dependencies\$dependency") @(
+        '/E', '/XJ', '/COPY:DAT', '/DCOPY:DAT', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS'
+    )
+    if ($LASTEXITCODE -gt 7) { throw "Failed to stage offline dependency: $dependency" }
+}
+New-Item -ItemType Directory -Force (Join-Path $bundleRoot 'dependencies\licenses') | Out-Null
+Copy-Item -LiteralPath (Join-Path $offlineDependencies 'licenses\OpenCode-LICENSE.txt'), (Join-Path $offlineDependencies 'licenses\Bun-LICENSE.md') -Destination (Join-Path $bundleRoot 'dependencies\licenses')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'OfflineDependencies.json') -Destination (Join-Path $bundleRoot 'dependency-sources.json')
+$inventory = Get-ChildItem -LiteralPath (Join-Path $bundleRoot 'dependencies') -Recurse -File | ForEach-Object {
+    [ordered]@{ path = $_.FullName.Substring($bundleRoot.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+}
+[ordered]@{ release = $Version; platform = 'windows-x64'; files = @($inventory) } | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $bundleRoot 'offline-dependencies.json')
 
 $appExe = Join-Path $bundleRoot 'OpenCodeTelegram.exe'
+$assemblyMetadata = Join-Path $stageRoot 'AssemblyVersion.cs'
+@"
+[assembly: System.Reflection.AssemblyVersion("$($parsedVersion.ToString(3)).0")]
+[assembly: System.Reflection.AssemblyFileVersion("$($parsedVersion.ToString(3)).0")]
+[assembly: System.Reflection.AssemblyInformationalVersion("$Version")]
+"@ | Set-Content -LiteralPath $assemblyMetadata -Encoding UTF8
 Copy-Item -Path (Join-Path $webViewDependencies '*.dll') -Destination $bundleRoot
 $appArgs = @(
-    '/nologo', '/target:winexe', '/optimize+', "/out:$appExe", "/win32icon:$icon",
+    '/nologo', '/target:winexe', '/platform:x64', '/optimize+', "/out:$appExe", "/win32icon:$icon",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
     "/reference:$wpf\WindowsBase.dll", "/reference:$wpf\PresentationCore.dll", "/reference:$wpf\PresentationFramework.dll",
     '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll',
@@ -119,7 +149,7 @@ $appArgs = @(
     '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
     "/reference:$webViewDependencies\Microsoft.Web.WebView2.Core.dll", "/reference:$webViewDependencies\Microsoft.Web.WebView2.Wpf.dll",
-    (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs')
+    (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs'), $assemblyMetadata
 )
 & $csc @appArgs
 if ($LASTEXITCODE -ne 0) { throw "Desktop app compilation failed with exit code $LASTEXITCODE." }
@@ -135,7 +165,7 @@ try {
 if (Test-Path -LiteralPath $bundleZip) { Remove-Item -LiteralPath $bundleZip -Force }
 Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $bundleZip -CompressionLevel Optimal
 $setupArgs = @(
-    '/nologo', '/target:winexe', '/optimize+', '/define:SETUP_BUILD', "/out:$setupExe", "/win32icon:$icon", "/resource:$bundleZip,BotRuntime.zip",
+    '/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/define:SETUP_BUILD', "/out:$setupExe", "/win32icon:$icon", "/resource:$bundleZip,BotRuntime.zip",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
     "/reference:$wpf\WindowsBase.dll", "/reference:$wpf\PresentationCore.dll", "/reference:$wpf\PresentationFramework.dll",
     '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll',
@@ -143,7 +173,7 @@ $setupArgs = @(
     '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
     "/reference:$webViewDependencies\Microsoft.Web.WebView2.Core.dll", "/reference:$webViewDependencies\Microsoft.Web.WebView2.Wpf.dll",
-    (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs')
+    (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs'), $assemblyMetadata
 )
 & $csc @setupArgs
 if ($LASTEXITCODE -ne 0) { throw "Self-extracting setup compilation failed with exit code $LASTEXITCODE." }

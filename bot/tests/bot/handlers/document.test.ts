@@ -378,7 +378,7 @@ describe("bot/handlers/document", () => {
     it("replies project_not_selected when no project is active", async () => {
       const projectSpy = vi
         .spyOn(settingsStore, "getCurrentProject")
-        .mockReturnValue(null);
+        .mockReturnValue(undefined);
       const { ctx, replyMock } = createDocumentContext({
         document: {
           file_id: "bin-file-id",

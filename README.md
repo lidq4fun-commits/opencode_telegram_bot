@@ -1,6 +1,8 @@
 # opencode_telegram_bot
 
-OpenCode Telegram is an independent Windows desktop product and Bot fork. The Windows ZIP distribution contains a setup program, README, and `Dependencies` folder with the Bot source, compiled Bot, production Node dependencies, Node.js runtime, and npm runtime. Installed builds do not install or call `@grinev/opencode-telegram-bot` from npm.
+OpenCode Telegram is an independent Windows desktop product and Bot fork. The Windows ZIP distribution contains a standalone setup program and README. The setup EXE embeds the Bot source, compiled Bot, production Node dependencies, Node.js runtime, and npm runtime; installed builds do not install or call `@grinev/opencode-telegram-bot` from npm.
+
+Target machines: 64-bit Windows 10/11. The installer carries Node.js/npm for the Bot; the desktop host uses the .NET Framework/WPF runtime supplied by supported Windows releases. Local OpenCode engine packages are downloaded when selected.
 
 ## Features
 
@@ -16,10 +18,10 @@ OpenCode Telegram is an independent Windows desktop product and Bot fork. The Wi
 
 ## Build the Windows ZIP package
 
-Build prerequisites: Windows .NET Framework C# compiler, Node.js 24 x64 with npm, and installed Bot development dependencies. The build script creates a clean staging directory, prunes dev-only Node packages, bundles Node/npm and Bot production dependencies, then emits a ZIP containing the setup executable, README, and `Dependencies\BotRuntime.zip`.
+Build prerequisites: 64-bit Windows with the .NET Framework C# compiler, Node.js 24+ x64 with npm, and installed Bot development dependencies. The build script auto-detects Node.js from `PATH` or common install folders (or accepts `-NodeHome`), invokes that exact Node/npm rather than relying on global command resolution, and creates a unique staging directory without deleting previous build files. It prunes dev-only packages and bundles Node/npm with Bot production dependencies.
 
 ```powershell
-& 'E:\opencode\encrypted_telegram_opencode_bot\desktop\Build-Desktop-Package.ps1'
+& '.\desktop\Build-Desktop-Package.ps1'
 ```
 
 Output:
@@ -30,17 +32,20 @@ desktop\artifacts\OpenCodeTelegram-1.0.0-Windows-x64.zip
 
 Before binding the same Telegram Bot token in the fork for the first time, stop the legacy v11 launcher/daemon to avoid two polling clients using one token. The new installer does not import the legacy `.env` or DPAPI configuration.
 
-The setup EXE reads the compressed runtime archive from the package's `Dependencies` folder. Installing extracts the independent Bot source/runtime and places `OpenCodeTelegram.exe` plus `opencode-telegram.cmd` in the selected installation folder. For a clean build, run `npm ci` in `bot/` first; `Build-Desktop-Package.ps1` prunes dev dependencies only in a staging copy.
+The standalone setup EXE embeds the compressed runtime archive. Installing extracts the independent Bot source/runtime and places `OpenCodeTelegram.exe` plus `opencode-telegram.cmd` in the selected installation folder. For a clean build, run `npm ci` in `bot/` first; `Build-Desktop-Package.ps1` prunes dev dependencies only in a staging copy.
 
 ## First run
 
-1. Extract the ZIP package, keeping its `Dependencies` folder alongside the setup EXE.
-2. Run the setup EXE and select an installation folder.
-3. Setup only installs the app. On the completion page, select **Launch opencode_telegram_bot now** if desired, or click **Finish** to exit; later, open it from the desktop or Start menu shortcut. Uninstall from Windows **Installed apps** or a compatible uninstall manager.
-4. In **机器人账号**, bind a BotFather token and the allowed Telegram user ID.
-5. In **加密设置**, choose EOT10 and set a password of at least 12 characters. Use the same password for this Bot in the Android client.
-6. In **OpenCode 引擎**, select an existing server or choose the separate **Install OpenCode (API v1)** or **Install OpenCode (API v2)** action. V1 installs `opencode-ai@^1`; V2 installs `@opencode/cli@^2`. The two CLI versions are kept in separate folders. The app checks Node.js and Bun prerequisites and installs missing dependencies at user scope when needed. Configure the server URL; a server password is optional and only needed when authentication is enabled.
-7. Press **启动机器人** from **概览**.
+1. Run the standalone setup EXE and select an installation folder. No Node.js, npm, or adjacent dependency folder is required for the Bot runtime.
+2. Setup only installs the app. On the completion page, select **Launch opencode_telegram_bot now** if desired, or click **Finish** to exit; later, open it from the desktop or Start menu shortcut. Uninstall from Windows **Installed apps** or a compatible uninstall manager.
+3. In **机器人账号**, bind a BotFather token and the allowed Telegram user ID.
+4. In **加密设置**, choose EOT10 and set a password of at least 12 characters. Use the same password for this Bot in the Android client.
+5. In **OpenCode 引擎**, select an existing server or choose the separate **Install OpenCode (API v1)** or **Install OpenCode (API v2)** action. V1 installs `opencode-ai@^1`; V2 installs `@opencode/cli@^2`. The two CLI versions are kept in separate folders. The app checks Node.js and Bun prerequisites and installs missing dependencies at user scope when needed. V2 requires a server password. For a local V2 service, the app generates and DPAPI-protects one automatically; for an existing server, enter its password in the engine settings.
+   Local engine installation requires internet access. If V2's Bun runtime is missing, the app downloads and SHA-256 verifies the official Windows x64 release and installs it under the current user's app-data folder; WinGet is only a fallback. Bun requires Windows 10 version 1809 or later.
+6. Press **启动机器人** from **概览**.
+7. Use **启动与 CLI** to run `opencode_telegram_bot`'s own management commands. **OpenCode Web** starts the selected version's web service, displays it in-app, and can open it in the default browser.
+
+The setup executable is self-contained and can be distributed by itself; the release ZIP contains the same installer plus this README.
 
 When the Bot service starts, the app first stops all local `opencode` processes, then starts the CLI matching the selected API version. Install that API version from **OpenCode 引擎** first.
 
@@ -65,16 +70,30 @@ opencode-telegram configure eot10 disable
 opencode-telegram configure opencode
 opencode-telegram configure show
 opencode-telegram opencode install
+opencode-telegram opencode scan
+opencode-telegram opencode select v2
+opencode-telegram opencode uninstall v1
+opencode-telegram config set model.id big-pickle
+opencode-telegram config set bot-token --env TELEGRAM_BOT_TOKEN
+opencode-telegram config unset eot10.password
+opencode-telegram opencode install v2
 opencode-telegram start
 opencode-telegram status
 opencode-telegram stop
 opencode-telegram autostart enable
 opencode-telegram autostart disable
 opencode-telegram autostart status
+opencode-telegram app-autostart enable
+opencode-telegram language en
+opencode-telegram logs --lines 100
+opencode-telegram web start
+opencode-telegram web status
+opencode-telegram web open
+opencode-telegram web stop
 opencode-telegram environment
 ```
 
-`configure bot` and `configure eot10` prompt for credentials without echoing secrets. `configure show` never prints tokens or passwords. `environment` prints only installed paths.
+The GUI command panel runs this same `opencode-telegram` CLI, not OpenCode's CLI. `config set` supports Bot credentials, EOT10 settings, API version/URL, engine executable, and model settings; pass secrets using `--env NAME` to avoid placing them in command history. `configure show` never prints tokens or passwords. The CLI covers Bot lifecycle, both autostart entries, app settings, engine scan/install/select/uninstall, and web-service lifecycle/opening. `environment` prints only installed paths.
 
 ## EOT10 protocol
 

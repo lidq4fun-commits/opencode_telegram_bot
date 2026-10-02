@@ -1,32 +1,61 @@
 [CmdletBinding()]
 param(
     [string]$Version = '1.0.0',
-    [string]$NodeHome = 'D:\Program Files\nodejs'
+    [string]$NodeHome = '',
+    [string]$OutputDirectory = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $botRoot = Join-Path $repoRoot 'bot'
-$stageRoot = Join-Path $PSScriptRoot '.build'
+$stageRoot = Join-Path $PSScriptRoot ('.build-release-' + [Guid]::NewGuid().ToString('N'))
 $bundleRoot = Join-Path $stageRoot 'bundle'
 $botBundle = Join-Path $bundleRoot 'bot'
 $runtimeRoot = Join-Path $bundleRoot 'runtime'
-$artifactRoot = Join-Path $PSScriptRoot 'artifacts'
+$artifactRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { Join-Path $PSScriptRoot 'artifacts' } else { [IO.Path]::GetFullPath($OutputDirectory) }
 $bundleZip = Join-Path $stageRoot 'BotRuntime.zip'
 $setupExe = Join-Path $artifactRoot "OpenCodeTelegram-Setup-$Version.exe"
 $releaseRoot = Join-Path $stageRoot 'release'
-$releaseDependencies = Join-Path $releaseRoot 'Dependencies'
 $releaseZip = Join-Path $artifactRoot "OpenCodeTelegram-$Version-Windows-x64.zip"
 $readmeSource = Join-Path $PSScriptRoot 'README-Installer.md'
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-$wpf = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF'
+$windowsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+$frameworkRoot = Join-Path $windowsRoot 'Microsoft.NET\Framework64\v4.0.30319'
+$csc = Join-Path $frameworkRoot 'csc.exe'
+$wpf = Join-Path $frameworkRoot 'WPF'
 $icon = Join-Path $repoRoot 'OpenCodeTelegramLauncher.ico'
+& (Join-Path $PSScriptRoot 'Restore-WebView2.ps1')
+$webViewDependencies = Join-Path $PSScriptRoot 'dependencies\webview2'
+
+if (-not [Environment]::Is64BitOperatingSystem) { throw 'The desktop package targets 64-bit Windows.' }
+if ([string]::IsNullOrWhiteSpace($NodeHome)) {
+    $nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    $nodeCandidates = @()
+    if ($nodeCommand) { $nodeCandidates += Split-Path -Parent $nodeCommand.Source }
+    $nodeCandidates += @(
+        (Join-Path $env:ProgramFiles 'nodejs'),
+        (Join-Path ${env:ProgramFiles(x86)} 'nodejs'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\nodejs')
+    )
+    $NodeHome = $nodeCandidates | Where-Object {
+        $_ -and (Test-Path -LiteralPath (Join-Path $_ 'node.exe')) -and
+        (Test-Path -LiteralPath (Join-Path $_ 'node_modules\npm\bin\npm-cli.js'))
+    } | Select-Object -First 1
+}
+if ([string]::IsNullOrWhiteSpace($NodeHome)) { throw 'Node.js was not found. Install Node.js 24+ x64 or pass -NodeHome <folder>.' }
+$NodeHome = (Resolve-Path -LiteralPath $NodeHome).Path
+$nodeExe = Join-Path $NodeHome 'node.exe'
+$npmCli = Join-Path $NodeHome 'node_modules\npm\bin\npm-cli.js'
+if (-not (Test-Path -LiteralPath $nodeExe)) { throw "Node.js was not found under NodeHome: $NodeHome" }
+$nodeArch = & $nodeExe -p 'process.arch'
+if ($LASTEXITCODE -ne 0 -or $nodeArch.Trim() -ne 'x64') { throw "The bundled Node.js must be x64; detected architecture: $nodeArch" }
+$nodeVersion = & $nodeExe -p 'process.versions.node'
+if ($LASTEXITCODE -ne 0 -or [version]$nodeVersion -lt [version]'24.0') { throw "Node.js 24 or newer is required for the bundled runtime; detected $nodeVersion." }
 
 foreach ($required in @(
     (Join-Path $botRoot 'src'),
     (Join-Path $botRoot 'node_modules'),
-    (Join-Path $NodeHome 'node.exe'),
-    (Join-Path $NodeHome 'node_modules\npm\bin\npm-cli.js'),
+    $nodeExe,
+    $npmCli,
     $csc,
     $icon,
     $readmeSource
@@ -34,42 +63,53 @@ foreach ($required in @(
     if (-not (Test-Path -LiteralPath $required)) { throw "Required build input is missing: $required" }
 }
 
-Write-Host 'Building the forked TypeScript Bot...'
-$botBuild = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d', '/c', 'npm run build' -WorkingDirectory $botRoot -Wait -PassThru -NoNewWindow
-if ($botBuild.ExitCode -ne 0) { throw "Bot source build failed with exit code $($botBuild.ExitCode)." }
+Write-Host "Building with Node $nodeVersion ($nodeArch) from $NodeHome..."
+Push-Location $botRoot
+try {
+    & $nodeExe $npmCli run build
+    if ($LASTEXITCODE -ne 0) { throw "Bot source build failed with exit code $LASTEXITCODE." }
+} finally { Pop-Location }
 
-if (Test-Path -LiteralPath $stageRoot) { Remove-Item -LiteralPath $stageRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $botBundle -Force | Out-Null
 New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $runtimeRoot 'node_modules') -Force | Out-Null
 New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 
-$copyBot = Start-Process -FilePath 'robocopy.exe' -ArgumentList @(
-    $botRoot, $botBundle,
-    '/E', '/XD', 'node_modules', '.git', 'logs', '/XF', '.env', '.env.*',
-    '/COPY:DAT', '/DCOPY:DAT', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS'
-) -Wait -PassThru -NoNewWindow
-if ($copyBot.ExitCode -gt 7) { throw "Failed to stage forked Bot source (robocopy $($copyBot.ExitCode))." }
-if (Test-Path -LiteralPath (Join-Path $botRoot '.env.example')) {
-    Copy-Item -LiteralPath (Join-Path $botRoot '.env.example') -Destination $botBundle -Force
+# Stage only runtime inputs; never include developer caches, tests, secrets or
+# machine-specific Bot state just because they happen to exist in the checkout.
+foreach ($directory in @('dist', 'assets')) {
+    $source = Join-Path $botRoot $directory
+    if (-not (Test-Path -LiteralPath $source)) { throw "Required Bot runtime directory is missing: $source" }
+    & robocopy.exe $source (Join-Path $botBundle $directory) @(
+        '/E', '/XJ', '/COPY:DAT', '/DCOPY:DAT', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS'
+    )
+    if ($LASTEXITCODE -gt 7) { throw "Failed to stage Bot runtime directory: $directory" }
+}
+foreach ($file in @('package.json', 'package-lock.json', 'EOT10Crypto.mjs', 'LICENSE', 'README.md', '.env.example')) {
+    $source = Join-Path $botRoot $file
+    if (-not (Test-Path -LiteralPath $source)) { throw "Required Bot runtime file is missing: $source" }
+    Copy-Item -LiteralPath $source -Destination $botBundle -Force
 }
 
-$copyNodeModules = Start-Process -FilePath 'robocopy.exe' -ArgumentList @(
-    (Join-Path $botRoot 'node_modules'),
-    (Join-Path $botBundle 'node_modules'),
+& robocopy.exe (Join-Path $botRoot 'node_modules') (Join-Path $botBundle 'node_modules') @(
     '/E', '/COPY:DAT', '/DCOPY:DAT', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS'
-) -Wait -PassThru -NoNewWindow
-if ($copyNodeModules.ExitCode -gt 7) { throw "Failed to stage Bot dependencies (robocopy $($copyNodeModules.ExitCode))." }
+)
+$copyNodeModulesExit = $LASTEXITCODE
+if ($copyNodeModulesExit -gt 7) { throw "Failed to stage Bot dependencies (robocopy $copyNodeModulesExit)." }
 
 Write-Host 'Pruning development-only dependencies from the runtime payload...'
-$prune = Start-Process -FilePath 'cmd.exe' -ArgumentList '/d', '/c', 'npm prune --offline --omit=dev --ignore-scripts --no-audit --no-fund --progress=true' -WorkingDirectory $botBundle -Wait -PassThru -NoNewWindow
-if ($prune.ExitCode -ne 0) { throw "npm prune failed with exit code $($prune.ExitCode)." }
+Push-Location $botBundle
+try {
+    & $nodeExe $npmCli prune --offline --omit=dev --ignore-scripts --no-audit --no-fund --progress=true
+    if ($LASTEXITCODE -ne 0) { throw "npm prune failed with exit code $LASTEXITCODE." }
+} finally { Pop-Location }
 
-Copy-Item -LiteralPath (Join-Path $NodeHome 'node.exe') -Destination $runtimeRoot -Force
+Copy-Item -LiteralPath $nodeExe -Destination $runtimeRoot -Force
 Copy-Item -LiteralPath (Join-Path $NodeHome 'LICENSE') -Destination $runtimeRoot -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath (Join-Path $NodeHome 'node_modules\npm') -Destination (Join-Path $runtimeRoot 'node_modules') -Recurse -Force
 
 $appExe = Join-Path $bundleRoot 'OpenCodeTelegram.exe'
+Copy-Item -Path (Join-Path $webViewDependencies '*.dll') -Destination $bundleRoot
 $appArgs = @(
     '/nologo', '/target:winexe', '/optimize+', "/out:$appExe", "/win32icon:$icon",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
@@ -78,6 +118,7 @@ $appArgs = @(
     '/reference:System.Management.dll',
     '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
+    "/reference:$webViewDependencies\Microsoft.Web.WebView2.Core.dll", "/reference:$webViewDependencies\Microsoft.Web.WebView2.Wpf.dll",
     (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs')
 )
 & $csc @appArgs
@@ -94,22 +135,22 @@ try {
 if (Test-Path -LiteralPath $bundleZip) { Remove-Item -LiteralPath $bundleZip -Force }
 Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $bundleZip -CompressionLevel Optimal
 $setupArgs = @(
-    '/nologo', '/target:winexe', '/optimize+', '/define:SETUP_BUILD', "/out:$setupExe", "/win32icon:$icon",
+    '/nologo', '/target:winexe', '/optimize+', '/define:SETUP_BUILD', "/out:$setupExe", "/win32icon:$icon", "/resource:$bundleZip,BotRuntime.zip",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
     "/reference:$wpf\WindowsBase.dll", "/reference:$wpf\PresentationCore.dll", "/reference:$wpf\PresentationFramework.dll",
     '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll',
     '/reference:System.Management.dll',
     '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
+    "/reference:$webViewDependencies\Microsoft.Web.WebView2.Core.dll", "/reference:$webViewDependencies\Microsoft.Web.WebView2.Wpf.dll",
     (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs')
 )
 & $csc @setupArgs
 if ($LASTEXITCODE -ne 0) { throw "Self-extracting setup compilation failed with exit code $LASTEXITCODE." }
 
-New-Item -ItemType Directory -Path $releaseDependencies -Force | Out-Null
+New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
 Copy-Item -LiteralPath $setupExe -Destination (Join-Path $releaseRoot (Split-Path -Leaf $setupExe)) -Force
 Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $releaseRoot 'README.md') -Force
-Copy-Item -LiteralPath $bundleZip -Destination (Join-Path $releaseDependencies 'BotRuntime.zip') -Force
 if (Test-Path -LiteralPath $releaseZip) { Remove-Item -LiteralPath $releaseZip -Force }
 Compress-Archive -Path (Join-Path $releaseRoot '*') -DestinationPath $releaseZip -CompressionLevel Optimal
 

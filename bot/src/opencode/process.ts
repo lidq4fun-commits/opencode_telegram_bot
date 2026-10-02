@@ -100,6 +100,19 @@ function resolveWindowsOpencodeExe(): string {
 
 /** The local `opencode` executable with the given arguments, resolved per platform. */
 function createOpencodeCommand(args: string[]): OpencodeServeSpawnCommand {
+  const configuredExecutable = process.env.OPENCODE_EXECUTABLE_PATH?.trim();
+
+  if (configuredExecutable && existsSync(configuredExecutable)) {
+    const selectedExecutable =
+      process.platform === "win32" && path.extname(configuredExecutable).toLowerCase() === ".cmd"
+        ? readNpmShimTarget(configuredExecutable)
+        : configuredExecutable;
+
+    if (selectedExecutable && existsSync(selectedExecutable)) {
+      return { command: selectedExecutable, args, windowsHide: process.platform === "win32" };
+    }
+  }
+
   if (process.platform === "win32") {
     const resolvedExe = resolveWindowsOpencodeExe();
 

@@ -71,6 +71,32 @@ describe("opencode/process", () => {
     });
   });
 
+  it("uses the explicitly selected OpenCode executable instead of searching PATH", () => {
+    const originalExecutable = process.env.OPENCODE_EXECUTABLE_PATH;
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-telegram-selected-"));
+    const executable = path.join(tempRoot, "selected-opencode.exe");
+
+    try {
+      fs.writeFileSync(executable, "", "utf8");
+      process.env.OPENCODE_EXECUTABLE_PATH = executable;
+
+      const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v2");
+
+      expect(command).toEqual({
+        command: executable,
+        args: ["serve", "--service", "--port", "4987"],
+        windowsHide: process.platform === "win32",
+      });
+    } finally {
+      if (originalExecutable === undefined) {
+        delete process.env.OPENCODE_EXECUTABLE_PATH;
+      } else {
+        process.env.OPENCODE_EXECUTABLE_PATH = originalExecutable;
+      }
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to cmd.exe on Windows when opencode.exe cannot be resolved", () => {
     if (process.platform !== "win32") {
       return;

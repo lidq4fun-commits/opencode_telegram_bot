@@ -43,6 +43,8 @@ No public inbound ports are required for normal usage.
 
 ### Session management
 
+- [x] Embedded desktop workspace and Telegram synchronize project, session, model and variant through local metadata and acknowledged actions. Phone actions or an active answer trigger forced following with an explanation; unchanged idle polling never prevents project browsing. Desktop prompts wait for session attachment before reaching OpenCode.
+
 - Fetch last N sessions (name + date)
 - Select an existing session, show the last user input as a quote and the last assistant reply in full, then follow its live updates
 - Browse up to `SESSIONS_LIST_LIMIT` recent root sessions across projects and git worktrees with running, idle, question and permission status; select one to switch project and follow it, including after detach

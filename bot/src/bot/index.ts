@@ -19,6 +19,7 @@ import { normalizeRichMessage } from "./handlers/rich-message-handler.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { interactionGuardMiddleware } from "./middleware/interaction-guard.js";
 import { staleUpdateMiddleware } from "./middleware/stale-update.js";
+import { beginDesktopMobileActivity, waitForDesktopSyncIdle } from "../app/services/desktop-sync-service.js";
 import {
   ensureCommandsInitialized,
   registerCommandRouter,
@@ -270,6 +271,19 @@ export function createBot(
   });
   bot.use(authMiddleware);
   bot.use(staleUpdateMiddleware);
+  bot.use(async (ctx, next) => {
+    if (process.env.OPENCODE_TELEGRAM_DESKTOP_SYNC !== "1" || (!ctx.message && !ctx.callbackQuery)) {
+      await next();
+      return;
+    }
+    const complete = beginDesktopMobileActivity();
+    try {
+      await waitForDesktopSyncIdle();
+      await next();
+    } finally {
+      complete();
+    }
+  });
   bot.on("message:rich_message", normalizeRichMessage);
   bot.use((ctx, next) => ensureCommandsInitialized(ctx, next, localCommandRegistry));
   const guardDeps = { ...container, localCommandRegistry };

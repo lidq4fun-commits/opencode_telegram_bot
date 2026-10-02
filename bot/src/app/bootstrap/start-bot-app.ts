@@ -22,6 +22,7 @@ import { flushLogger, getLogFilePath, initializeLogger, logger } from "../../uti
 import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 import { getTelegramRetryAfterMs } from "../../utils/telegram-rate-limit-retry.js";
 import { createAppContainer } from "./app-container.js";
+import { startDesktopSync } from "../services/desktop-sync-service.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const SETTINGS_FLUSH_TIMEOUT_MS = 1000;
@@ -217,6 +218,7 @@ export async function startBotApp(): Promise<void> {
     builtInCommands: BUILT_IN_COMMAND_NAMES,
   });
   const bot = createBot(container, localCommandRegistry);
+  const stopDesktopSync = startDesktopSync(container, bot);
   await scheduledTaskRuntime.initialize(
     bot,
     createScheduledTaskDeliverySender(bot.api, config.telegram.allowedUserId),
@@ -315,6 +317,7 @@ export async function startBotApp(): Promise<void> {
     }
     throw error;
   } finally {
+    await stopDesktopSync();
     process.off("unhandledRejection", unhandledRejectionHandler);
     process.off("uncaughtException", uncaughtExceptionHandler);
     process.off("SIGINT", handleSigint);

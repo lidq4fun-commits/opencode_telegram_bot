@@ -46,7 +46,7 @@ sealed class DesktopSettings
     [DataMember] public bool AutoStart { get; set; }
     [DataMember] public bool AutoStartApp { get; set; }
     [DataMember] public string WebFollowMode { get; set; }
-    public string ResolvedWebFollowMode { get { return WebFollowMode=="off"||WebFollowMode=="force"?WebFollowMode:"prompt"; } }
+    public string ResolvedWebFollowMode { get { return "force"; } }
 }
 
 [DataContract]
@@ -54,6 +54,11 @@ sealed class TelegramWebContext
 {
     [DataMember(Name="currentProject")] public TelegramWebProject Project { get; set; }
     [DataMember(Name="currentSession")] public TelegramWebSession Session { get; set; }
+    [DataMember(Name="instance")] public string Instance { get; set; }
+    [DataMember(Name="mobileRevision")] public long MobileRevision { get; set; }
+    [DataMember(Name="mobileActive")] public bool MobileActive { get; set; }
+    [DataMember(Name="busy")] public bool Busy { get; set; }
+    [DataMember(Name="updatedAt")] public long UpdatedAt { get; set; }
 
     public bool HasSession
     {
@@ -67,7 +72,12 @@ sealed class TelegramWebContext
     }
     public Uri WebAddress(Uri server,string version)
     {
-        if(!HasSession)return server;
+        if(!HasSession)
+        {
+            if(version!="v1"||Session!=null||Project==null||String.IsNullOrWhiteSpace(Project.Directory))return server;
+            string projectKey=Convert.ToBase64String(Encoding.UTF8.GetBytes(Project.Directory)).TrimEnd('=').Replace('+','-').Replace('/','_');
+            return new Uri(server.GetLeftPart(UriPartial.Authority)+"/"+projectKey+"/session");
+        }
         string authority=server.GetLeftPart(UriPartial.Authority);
         string key=version=="v2"?authority:Session.Directory;
         string encoded=Convert.ToBase64String(Encoding.UTF8.GetBytes(key)).TrimEnd('=').Replace('+','-').Replace('/','_');
@@ -93,6 +103,19 @@ sealed class TelegramWebContext
         if(found)return false;
         context=new TelegramWebContext();
         return true;
+    }
+    public static bool TryLoadSync(string home,out TelegramWebContext context,out string json)
+    {
+        context=null;json=null;
+        try
+        {
+            using(var stream=new FileStream(Path.Combine(home,"desktop-sync","state.json"),FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
+            using(var reader=new StreamReader(stream,Encoding.UTF8))json=reader.ReadToEnd();
+            using(var stream=new MemoryStream(Encoding.UTF8.GetBytes(json)))context=(TelegramWebContext)new DataContractJsonSerializer(typeof(TelegramWebContext)).ReadObject(stream);
+            return context!=null&&!String.IsNullOrWhiteSpace(context.Instance)&&DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-context.UpdatedAt<6000;
+        }
+        catch(IOException){}catch(UnauthorizedAccessException){}catch(SerializationException){}
+        return false;
     }
 }
 [DataContract]
@@ -963,6 +986,7 @@ static class BotRuntime
         env[ProductPaths.EnvRoot] = ProductPaths.Root;
         env[ProductPaths.EnvHome] = ProductPaths.Home;
         env["OPENCODE_TELEGRAM_RUNTIME_MODE"] = "installed";
+        env["OPENCODE_TELEGRAM_DESKTOP_SYNC"] = "1";
         env["TELEGRAM_BOT_TOKEN"] = s.BotToken ?? "";
         env["TELEGRAM_ALLOWED_USER_ID"] = s.AllowedUserId ?? "";
         env["BOT_LOCALE"] = s.Locale ?? "zh";
@@ -1451,7 +1475,7 @@ static class Cli
     {
         Uri address=new Uri(GetWebUrl(settings));
         TelegramWebContext context;
-        return settings.ResolvedWebFollowMode!="off"&&TelegramWebContext.TryLoad(ProductPaths.Home,out context)?context.WebAddress(address,settings.OpenCodeServerVersion):address;
+        return TelegramWebContext.TryLoad(ProductPaths.Home,out context)?context.WebAddress(address,settings.OpenCodeServerVersion):address;
     }
     public static Process TryReadWebProcess(string pidFile,out int pid)
     {
@@ -1568,6 +1592,23 @@ static class Cli
             ? "Remove opencode_telegram_bot from this computer? Your saved Bot settings and logs will be kept."
             : "确定从此电脑卸载 opencode_telegram_bot 吗？已保存的机器人设置和日志会保留。";
         if (!quiet && MessageBox.Show(uninstallPrompt,ProductPaths.AppName,MessageBoxButton.YesNo,MessageBoxImage.Question) != MessageBoxResult.Yes) return 0;
+        if(quiet)return UninstallCore();
+        bool finished=false;int result=1;
+        var panel=new StackPanel{Margin=new Thickness(28)};
+        var message=new TextBlock{Text=uninstallSettings.Locale=="en"?"Uninstalling and cleaning up related processes…":"正在卸载并清理相关进程…",TextWrapping=TextWrapping.Wrap,FontSize=15,Margin=new Thickness(0,0,0,18)};
+        panel.Children.Add(message);panel.Children.Add(new ProgressBar{IsIndeterminate=true,Height=8});
+        var progressWindow=new Window{Title=uninstallSettings.Locale=="en"?"Uninstalling":"正在卸载",Width=420,SizeToContent=SizeToContent.Height,WindowStartupLocation=WindowStartupLocation.CenterScreen,ResizeMode=ResizeMode.NoResize,Content=panel};
+        progressWindow.Closing+=(s,e)=>{if(!finished)e.Cancel=true;};
+        progressWindow.Loaded+=async(s,e)=>
+        {
+            try{result=await Task.Run(()=>UninstallCore());}
+            catch(Exception ex){MessageBox.Show(progressWindow,(uninstallSettings.Locale=="en"?"Uninstall failed: ":"卸载失败：")+ex.Message,ProductPaths.AppName,MessageBoxButton.OK,MessageBoxImage.Error);}
+            finally{finished=true;progressWindow.Close();}
+        };
+        progressWindow.ShowDialog();return result;
+    }
+    static int UninstallCore()
+    {
         string root = Path.GetFullPath(ProductPaths.Root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         try { BotRuntime.Execute("stop", SettingsStore.Load(), 20); } catch { }
         StartupSetting.Set(false);
@@ -1611,6 +1652,7 @@ sealed class DesktopApp
     string activeServiceLogPath;
     bool statusRefreshRunning;
     StackPanel content;
+    ScrollViewer contentScroller;
     StackPanel sidebar;
     Button activeNav;
     string[] navLabels;
@@ -1628,21 +1670,13 @@ sealed class DesktopApp
     string cliTranscript="";
     Process webServerProcess;
     TextBlock webStatus;
-    Button webStartButton, webStopButton;
+    MenuItem webStartButton, webStopButton;
     DispatcherTimer webContextTimer;
     TelegramWebContext telegramWebContext=new TelegramWebContext();
     TextBlock webContextStatus;
-    Button webFollowButton;
     Uri connectedWebServer;
     bool webContextRefreshRunning;
-    readonly List<RadioButton> webFollowOptions=new List<RadioButton>();
-    bool webFollowModeUpdating;
-    TextBlock webFollowFeedback,webContextHint;
-    Uri lastWebAddress;
-    bool webContextAvailable;
-    string webPendingTarget;
-    bool webFollowChoicesVisible=true;
-    TextBlock webFollowModeHeading;
+    TextBlock webContextHint;
 
     bool shutdownRunning,shutdownComplete;
     public void RunGui()
@@ -1656,26 +1690,36 @@ sealed class DesktopApp
             e.Cancel=true;
             if(shutdownRunning)return;
             shutdownRunning=true;
-            if(logTimer!=null)logTimer.Stop();
-            if(webContextTimer!=null)webContextTimer.Stop();
-            await StopCliCommand();
+            bool cleanupFinished=false;
+            var cleanupContent=new StackPanel{Margin=new Thickness(28)};
+            cleanupContent.Children.Add(new TextBlock{Text=settings.Locale=="en"?"Cleaning up related processes…":"正在清理相关进程…",FontSize=16,Margin=new Thickness(0,0,0,18)});
+            cleanupContent.Children.Add(new ProgressBar{IsIndeterminate=true,Height=6});
+            var cleanupWindow=new Window{Owner=window,Title=settings.Locale=="en"?"Exiting":"正在退出",Width=360,SizeToContent=SizeToContent.Height,WindowStartupLocation=WindowStartupLocation.CenterOwner,ResizeMode=ResizeMode.NoResize,ShowInTaskbar=false,Content=cleanupContent};
+            cleanupWindow.Closing+=(sender,args)=>{if(!cleanupFinished)args.Cancel=true;};
+            cleanupWindow.Show();
             window.IsEnabled=false;
-            SetStatus(settings.Locale=="en"?"Stopping all services before exit…":"正在停止所有服务，完成后退出…",false);
-            while(serviceActionRunning||openCodeOperationRunning||webConnectionRunning)await Task.Delay(200);
             try
             {
+                if(logTimer!=null)logTimer.Stop();
+                if(webContextTimer!=null)webContextTimer.Stop();
+                await StopCliCommand();
+                SetStatus(settings.Locale=="en"?"Stopping all services before exit…":"正在停止所有服务，完成后退出…",false);
+                while(serviceActionRunning||openCodeOperationRunning||webConnectionRunning)await Task.Delay(200);
                 await Task.Run(()=>
                 {
                     try{BotRuntime.Stop(settings);}catch{BotRuntime.StopCompetingBotProcesses();}
                     if(settings.OpenCodeServerVersion=="v2")try{BotRuntime.StopLocalV2Service(settings);}catch{}
                     BotRuntime.StopOpenCodeProcesses();
                 });
+                cleanupFinished=true;cleanupWindow.Close();
                 shutdownComplete=true;window.Close();
             }
             catch(Exception ex)
             {
                 shutdownRunning=false;window.IsEnabled=true;
+                cleanupFinished=true;cleanupWindow.Close();
                 SetStatus((settings.Locale=="en"?"Unable to stop services: ":"停止服务失败：")+ex.Message,true);
+                MessageBox.Show(window,(settings.Locale=="en"?"Unable to clean up related processes: ":"清理相关进程失败：")+ex.Message,ProductPaths.AppName,MessageBoxButton.OK,MessageBoxImage.Error);
             }
         };
         app.MainWindow = window;
@@ -1686,18 +1730,9 @@ sealed class DesktopApp
     {
         var w = new Window { Width = 1120, Height = 760, MinWidth = 980, MinHeight = 680, WindowStartupLocation = WindowStartupLocation.CenterScreen, WindowStyle = WindowStyle.SingleBorderWindow, Background = new SolidColorBrush(Color.FromRgb(246, 247, 251)), ResizeMode = ResizeMode.CanResize, Title = ProductPaths.AppName };
         var shell = new Border { Background = new SolidColorBrush(Color.FromRgb(246, 247, 251)) };
-        var root = new Grid(); root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(58) }); root.RowDefinitions.Add(new RowDefinition());
+        var root = new Grid();
         shell.Child = root; w.Content = shell;
-        var titlebar = new Grid { Margin = new Thickness(22, 0, 18, 0) };
-        titlebar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); titlebar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var title = Label(ProductPaths.AppName, 14, true, Color.FromRgb(53, 58, 72)); title.VerticalAlignment = VerticalAlignment.Center; titlebar.Children.Add(title); Grid.SetColumn(title, 0);
-        languagePicker=new ComboBox{Width=142,Height=32,VerticalAlignment=VerticalAlignment.Center,ItemsSource=new string[]{"简体中文","English"},SelectedIndex=settings.Locale=="en"?1:0,ToolTip="Language / 界面语言"};
-        languagePicker.SelectionChanged+=(s,e)=>{if(languagePicker.SelectedIndex<0)return;string locale=languagePicker.SelectedIndex==1?"en":"zh";if(settings.Locale==locale)return;settings.Locale=locale;try{SettingsStore.Save(settings);ApplyLanguage();ShowPage(selectedPage);}catch(Exception ex){MessageBox.Show("无法保存语言设置："+ex.Message,ProductPaths.AppName,MessageBoxButton.OK,MessageBoxImage.Error);}};
-        titlebar.Children.Add(languagePicker); Grid.SetColumn(languagePicker,1);
-        titlebar.MouseLeftButtonDown += (s,e) => { if (e.ButtonState == MouseButtonState.Pressed) w.DragMove(); };
-        root.Children.Add(titlebar); Grid.SetRow(titlebar, 0);
-
-        var body = new Grid(); body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) }); body.ColumnDefinitions.Add(new ColumnDefinition()); Grid.SetRow(body, 1); root.Children.Add(body);
+        var body = new Grid(); body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) }); body.ColumnDefinitions.Add(new ColumnDefinition()); root.Children.Add(body);
         sidebar = new StackPanel { Background = new SolidColorBrush(Color.FromRgb(239, 241, 247)), Margin = new Thickness(0, 0, 1, 0) };
         var brand = new StackPanel { Margin = new Thickness(22, 22, 16, 28) };
         brand.Children.Add(Label(ProductPaths.AppName, 16, true, Color.FromRgb(35, 41, 56)));
@@ -1709,6 +1744,7 @@ sealed class DesktopApp
         sidebar.Children.Add(new StackPanel { VerticalAlignment = VerticalAlignment.Bottom, Children = { sideFooter } });
         body.Children.Add(sidebar); Grid.SetColumn(sidebar, 0);
         var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        contentScroller=scroller;
         content = new StackPanel { Margin = new Thickness(36, 28, 36, 34) }; scroller.Content = content; body.Children.Add(scroller); Grid.SetColumn(scroller, 1);
         ShowPage(0);
         w.Loaded += async (s,e) => { if(selectedPage==0) await RefreshStatus(); };
@@ -1718,6 +1754,8 @@ sealed class DesktopApp
     void ShowPage(int page)
     {
         selectedPage = page;
+        contentScroller.Content=content;
+        contentScroller.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;
         if(logTimer!=null) logTimer.Stop();
         if(webContextTimer!=null)webContextTimer.Stop();
         content.Children.Clear();
@@ -1952,109 +1990,33 @@ sealed class DesktopApp
         string version=settings.OpenCodeServerVersion=="v2"?"v2":"v1";
         Uri address; string url=BotRuntime.ResolveOpenCodeUrl(settings);if(!Uri.TryCreate(url,UriKind.Absolute,out address))address=new Uri(version=="v2"?"http://127.0.0.1:49374":"http://127.0.0.1:4096");
         connectedWebServer=null;
-        webContextAvailable=false;
-        webPendingTarget=null;
         bool en=settings.Locale=="en";
-        AddHeading("OpenCode 网页端",en?"Your desktop workspace for shared conversations and uninterrupted work.":"在电脑继续对话与工作，自由选择是否跟随 Telegram 会话。");
-        var controls=Card();controls.Padding=new Thickness(18,14,18,14);var panel=new StackPanel();controls.Child=panel;
-        var connectionHeader=new Grid();connectionHeader.ColumnDefinitions.Add(new ColumnDefinition());connectionHeader.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        var endpoint=Label("OpenCode "+version.ToUpperInvariant()+"  ·  "+address,13,true,Color.FromRgb(59,67,87));endpoint.TextWrapping=TextWrapping.NoWrap;endpoint.TextTrimming=TextTrimming.CharacterEllipsis;endpoint.ToolTip=address.ToString();connectionHeader.Children.Add(endpoint);
-        webStatus=Label(en?"Connecting…":"正在连接…",12,false,Color.FromRgb(105,113,133));webStatus.MaxWidth=310;webStatus.Margin=new Thickness(18,0,0,0);Grid.SetColumn(webStatus,1);connectionHeader.Children.Add(webStatus);panel.Children.Add(connectionHeader);
-        var row=new WrapPanel{Margin=new Thickness(0,8,0,0)};
-        webStartButton=ActionButton(settings.Locale=="en"?"Reconnect":"重新连接",true);webStartButton.Click+=async(a,b)=>await StartOpenCodeWeb(version,address);
-        var webRefresh=ActionButton("刷新网页",false);webRefresh.Click+=async(a,b)=>{if(embeddedBrowser!=null&&embeddedBrowser.CoreWebView2!=null)embeddedBrowser.CoreWebView2.Reload();else await StartOpenCodeWeb(version,address);};
-        var openExternal=ActionButton("在默认浏览器打开",false);openExternal.Click+=async(a,b)=>await OpenExternalWeb(version,address);
-        webStopButton=ActionButton("停止网页服务",false);webStopButton.IsEnabled=webServerProcess!=null&&!webServerProcess.HasExited;webStopButton.Click+=(a,b)=>StopOpenCodeWeb();row.Children.Add(webStartButton);row.Children.Add(webRefresh);row.Children.Add(openExternal);row.Children.Add(webStopButton);
-        foreach(Button button in row.Children){button.Padding=new Thickness(13,7,13,7);button.Margin=new Thickness(0,0,8,4);}
-        panel.Children.Add(row);content.Children.Add(controls);
-        var contextCard=Card();var contextPanel=new StackPanel();contextCard.Child=contextPanel;
-        contextCard.Padding=new Thickness(18,16,18,16);
-        var modeHeader=new Grid();modeHeader.ColumnDefinitions.Add(new ColumnDefinition());modeHeader.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});modeHeader.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        webFollowModeHeading=Label("",15,true,Color.FromRgb(39,46,65));modeHeader.Children.Add(webFollowModeHeading);
-        webFollowFeedback=Label(en?"Saved automatically":"选择后自动保存",11,false,Color.FromRgb(105,113,133));webFollowFeedback.Margin=new Thickness(10,3,10,0);Grid.SetColumn(webFollowFeedback,1);modeHeader.Children.Add(webFollowFeedback);
-        var choices=new Grid{Margin=new Thickness(0,8,0,12),Visibility=webFollowChoicesVisible?Visibility.Visible:Visibility.Collapsed};webFollowOptions.Clear();
-        var toggleChoices=ActionButton(en?(webFollowChoicesVisible?"Collapse":"Options"):(webFollowChoicesVisible?"收起选项":"展开选项"),false);toggleChoices.Padding=new Thickness(8,3,8,3);toggleChoices.Margin=new Thickness(0,0,0,8);Grid.SetColumn(toggleChoices,2);modeHeader.Children.Add(toggleChoices);
-        toggleChoices.Click+=(a,b)=>{webFollowChoicesVisible=!webFollowChoicesVisible;choices.Visibility=webFollowChoicesVisible?Visibility.Visible:Visibility.Collapsed;toggleChoices.Content=en?(webFollowChoicesVisible?"Collapse":"Options"):(webFollowChoicesVisible?"收起选项":"展开选项");};contextPanel.Children.Add(modeHeader);
-        string[] modes={"off","prompt","force"};
-        string[] titles=en?new[]{"Don't follow","Prompt to follow","Force follow"}:new[]{"不跟随","提示跟随","强制跟随"};
-        string[] descriptions=en?new[]{"Browse independently. Opens your last page or the home page; Telegram switches have no effect.","Opens Telegram's session on entry. Later switches only show a notice; click Follow to switch.","Always follows Telegram's session, including automatic switches. Unsent desktop input may be lost."}:new[]{"独立浏览，进入时打开上次页面或首页；Telegram 切换不会影响网页。","进入时打开 Telegram 会话；之后只提示，点击“跟随”才切换，保护未发送输入。","始终跟随 Telegram 当前会话，自动切换；可能丢失电脑尚未发送的输入。"};
-        for(int i=0;i<modes.Length;i++)
-        {
-            choices.ColumnDefinitions.Add(new ColumnDefinition());
-            var optionContent=new StackPanel();optionContent.Children.Add(Label(titles[i],14,true,Color.FromRgb(39,46,65)));optionContent.Children.Add(Label(descriptions[i],12,false,Color.FromRgb(105,113,133)));
-            var option=new RadioButton{GroupName="TelegramWebFollow",Tag=modes[i],Content=optionContent,Padding=new Thickness(10),Margin=new Thickness(i==0?0:8,0,0,0),VerticalContentAlignment=VerticalAlignment.Top,HorizontalContentAlignment=HorizontalAlignment.Stretch,MinHeight=106,Cursor=Cursors.Hand};
-            option.IsChecked=settings.ResolvedWebFollowMode==modes[i];
-            option.Checked+=(a,b)=>{if(!webFollowModeUpdating)ChangeWebFollowMode((string)((RadioButton)a).Tag);};
-            var optionBorder=new Border{CornerRadius=new CornerRadius(10),BorderThickness=new Thickness(1),Child=option};optionBorder.Margin=option.Margin;option.Margin=new Thickness(0);
-            Grid.SetColumn(optionBorder,i);choices.Children.Add(optionBorder);webFollowOptions.Add(option);
-        }
-        UpdateWebFollowOptionStyles();contextPanel.Children.Add(choices);
-        var contextRow=new Grid();contextRow.ColumnDefinitions.Add(new ColumnDefinition());contextRow.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
-        webContextStatus=Label(en?"Reading Telegram project and session…":"正在读取 Telegram 当前项目与会话…",12,false,Color.FromRgb(83,91,111));webContextStatus.TextWrapping=TextWrapping.NoWrap;webContextStatus.TextTrimming=TextTrimming.CharacterEllipsis;webContextStatus.MinHeight=36;contextRow.Children.Add(webContextStatus);
-        webFollowButton=ActionButton(settings.Locale=="en"?"Follow Telegram session":"跟随 Telegram 当前会话",true);webFollowButton.IsEnabled=false;
-        webFollowButton.Padding=new Thickness(13,8,13,8);webFollowButton.Margin=new Thickness(12,0,0,0);webFollowButton.VerticalAlignment=VerticalAlignment.Center;Grid.SetColumn(webFollowButton,1);contextRow.Children.Add(webFollowButton);
-        webFollowButton.Click+=async(a,b)=>
-        {
-            await RefreshTelegramWebContext();
-            if(!webContextAvailable||!telegramWebContext.HasSession)return;
-            if(connectedWebServer!=null&&embeddedBrowser!=null&&embeddedBrowser.CoreWebView2!=null)NavigateWeb(connectedWebServer,true);
-            else await StartOpenCodeWeb(version,address);
-        };
-        contextPanel.Children.Add(contextRow);webContextHint=Label("",11,false,Color.FromRgb(105,113,133));webContextHint.Margin=new Thickness(0,6,0,0);contextPanel.Children.Add(webContextHint);content.Children.Add(contextCard);
-        var browserCard=Card();browserCard.Padding=new Thickness(8);embeddedBrowser=new Microsoft.Web.WebView2.Wpf.WebView2{Height=580,MinHeight=360};browserCard.Child=embeddedBrowser;content.Children.Add(browserCard);
+        var layout=new Grid{Margin=new Thickness(8)};
+        layout.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});layout.RowDefinitions.Add(new RowDefinition());
+        var toolbar=new Grid{Margin=new Thickness(4,0,0,6)};toolbar.ColumnDefinitions.Add(new ColumnDefinition());toolbar.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
+        var title=Label(en?"OpenCode Web":"OpenCode 网页端",13,true,Color.FromRgb(59,67,87));title.VerticalAlignment=VerticalAlignment.Center;toolbar.Children.Add(title);
+        var menu=new ContextMenu();
+        webStartButton=new MenuItem{Header=en?"Reconnect":"重新连接"};webStartButton.Click+=async(a,b)=>await StartOpenCodeWeb(version,address);
+        var webRefresh=new MenuItem{Header=en?"Refresh page":"刷新网页"};webRefresh.Click+=async(a,b)=>{if(embeddedBrowser!=null&&embeddedBrowser.CoreWebView2!=null)embeddedBrowser.CoreWebView2.Reload();else await StartOpenCodeWeb(version,address);};
+        var openExternal=new MenuItem{Header=en?"Open in default browser":"在默认浏览器打开"};openExternal.Click+=async(a,b)=>await OpenExternalWeb(version,address);
+        webStopButton=new MenuItem{Header=en?"Stop web service":"停止网页服务"};webStopButton.IsEnabled=webServerProcess!=null&&!webServerProcess.HasExited;webStopButton.Click+=(a,b)=>StopOpenCodeWeb();
+        menu.Items.Add(webStartButton);menu.Items.Add(webRefresh);menu.Items.Add(openExternal);menu.Items.Add(webStopButton);menu.Items.Add(new Separator());
+        var details=new StackPanel{MaxWidth=420};details.Children.Add(Label("OpenCode "+version.ToUpperInvariant()+" · "+address,12,false,Color.FromRgb(83,91,111)));
+        webStatus=Label(en?"Connecting…":"正在连接…",12,false,Color.FromRgb(105,113,133));details.Children.Add(webStatus);
+        webContextStatus=Label(en?"Reading shared workspace…":"正在读取共享工作区…",12,false,Color.FromRgb(83,91,111));details.Children.Add(webContextStatus);
+        webContextHint=Label("",11,false,Color.FromRgb(105,113,133));details.Children.Add(webContextHint);menu.Items.Add(new MenuItem{Header=details,IsEnabled=false});
+        var more=new Button{Content="⋯",Width=36,Height=30,FontSize=20,Padding=new Thickness(0),ToolTip=en?"Web options":"网页选项",ContextMenu=menu};
+        more.Click+=(a,b)=>{menu.PlacementTarget=more;menu.Placement=System.Windows.Controls.Primitives.PlacementMode.Bottom;menu.IsOpen=true;};Grid.SetColumn(more,1);toolbar.Children.Add(more);layout.Children.Add(toolbar);
+        embeddedBrowser=new Microsoft.Web.WebView2.Wpf.WebView2();Grid.SetRow(embeddedBrowser,1);layout.Children.Add(embeddedBrowser);
+        contentScroller.VerticalScrollBarVisibility=ScrollBarVisibility.Disabled;contentScroller.Content=layout;
         var browser=embeddedBrowser;
-        browser.SourceChanged+=(a,b)=>{if(embeddedBrowser==browser){Uri current;if(Uri.TryCreate(browser.CoreWebView2.Source,UriKind.Absolute,out current)&&(current.Scheme=="http"||current.Scheme=="https"))lastWebAddress=new Uri(current.GetLeftPart(UriPartial.Path)+current.Fragment);UpdateTelegramWebContextStatus();}};
-        browser.NavigationCompleted+=(a,b)=>{if(embeddedBrowser!=browser)return;webPendingTarget=null;if(!b.IsSuccess)webStatus.Text=(settings.Locale=="en"?"Web page failed to load: ":"网页加载失败：")+b.WebErrorStatus+(settings.Locale=="en"?". Reconnect or open in your default browser.":"。请重新连接或在默认浏览器打开。");};
+        browser.SourceChanged+=(a,b)=>{if(embeddedBrowser==browser)UpdateTelegramWebContextStatus();};
+        browser.NavigationCompleted+=async(a,b)=>{if(embeddedBrowser!=browser)return;if(!b.IsSuccess)webStatus.Text=(settings.Locale=="en"?"Web page failed to load: ":"网页加载失败：")+b.WebErrorStatus+(settings.Locale=="en"?". Reconnect or open in your default browser.":"。请重新连接或在默认浏览器打开。");else await RefreshTelegramWebContext();};
         browser.Loaded+=async(a,b)=>{if(embeddedBrowser==browser){await RefreshTelegramWebContext();if(embeddedBrowser==browser)await StartOpenCodeWeb(version,address);}};
-        webContextTimer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(2)};
+        webContextTimer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(500)};
         webContextTimer.Tick+=async(a,b)=>await RefreshTelegramWebContext();webContextTimer.Start();
     }
 
-    void UpdateWebFollowOptionStyles()
-    {
-        bool en=settings.Locale=="en";
-        string title=settings.ResolvedWebFollowMode=="off"?(en?"Don't follow":"不跟随"):settings.ResolvedWebFollowMode=="force"?(en?"Force follow":"强制跟随"):(en?"Prompt to follow":"提示跟随");
-        if(webFollowModeHeading!=null)webFollowModeHeading.Text=(en?"Telegram follow · ":"Telegram 跟随 · ")+title;
-        foreach(var option in webFollowOptions)
-        {
-            bool selected=(string)option.Tag==settings.ResolvedWebFollowMode;
-            var border=option.Parent as Border;
-            if(border==null)continue;
-            border.Background=new SolidColorBrush(selected?Color.FromRgb(237,243,255):Color.FromRgb(248,249,252));
-            border.BorderBrush=new SolidColorBrush(selected?Color.FromRgb(92,139,232):Color.FromRgb(230,232,238));
-        }
-    }
-    void ChangeWebFollowMode(string mode)
-    {
-        string previous=settings.WebFollowMode;
-        settings.WebFollowMode=mode;
-        try
-        {
-            SettingsStore.Save(settings);
-            webFollowFeedback.Text=settings.Locale=="en"?"Saved · applies immediately":"已保存 · 立即生效";
-            webFollowFeedback.Foreground=new SolidColorBrush(Color.FromRgb(33,128,74));
-            webFollowFeedback.ToolTip=null;
-        }
-        catch(Exception ex)
-        {
-            settings.WebFollowMode=previous;
-            webFollowModeUpdating=true;
-            foreach(var option in webFollowOptions)option.IsChecked=(string)option.Tag==settings.ResolvedWebFollowMode;
-            webFollowModeUpdating=false;
-            webFollowFeedback.Text=settings.Locale=="en"?"Not saved":"保存失败";
-            webFollowFeedback.Foreground=new SolidColorBrush(Color.FromRgb(191,55,55));
-            webFollowFeedback.ToolTip=ex.Message;
-        }
-        UpdateWebFollowOptionStyles();UpdateTelegramWebContextStatus();ApplyForcedWebFollow();
-    }
-    void ApplyForcedWebFollow()
-    {
-        if(settings.ResolvedWebFollowMode!="force"||!webContextAvailable||!telegramWebContext.HasSession||webConnectionRunning||shutdownRunning||selectedPage!=6||connectedWebServer==null||embeddedBrowser==null||embeddedBrowser.CoreWebView2==null)return;
-        Uri current;
-        Uri target=telegramWebContext.WebAddress(connectedWebServer,settings.OpenCodeServerVersion);
-        if(webPendingTarget==target.GetLeftPart(UriPartial.Path))return;
-        if(!Uri.TryCreate(embeddedBrowser.CoreWebView2.Source,UriKind.Absolute,out current)||current.GetLeftPart(UriPartial.Path)!=target.GetLeftPart(UriPartial.Path))NavigateWeb(connectedWebServer,true);
-    }
     async Task RefreshTelegramWebContext()
     {
         if(selectedPage!=6)return;
@@ -2064,20 +2026,24 @@ sealed class DesktopApp
         var status=webContextStatus;
         try
         {
-            TelegramWebContext context=null;
-            bool loaded=await Task.Run(()=>TelegramWebContext.TryLoad(ProductPaths.Home,out context));
+            TelegramWebContext context=null;string json=null;
+            bool loaded=await Task.Run(()=>TelegramWebContext.TryLoadSync(ProductPaths.Home,out context,out json));
             if(selectedPage!=6||webContextStatus!=status)return;
-            webContextAvailable=loaded;
             if(!loaded)
             {
-                webContextStatus.Text=settings.Locale=="en"?"Telegram context is temporarily unavailable.":"Telegram 项目与会话状态暂时不可用。";
-                webContextHint.Text=settings.Locale=="en"?"Your current page is kept. Retrying automatically; no switch will occur until state is available.":"保留当前网页并自动重试，读取恢复前不会跟随切换。";
-                webFollowButton.IsEnabled=false;
+                webContextStatus.Text=settings.Locale=="en"?"Workspace sync is unavailable.":"工作区同步暂时不可用。";
+                webContextHint.Text=settings.Locale=="en"?"Start or reconnect the bot. Your current page is kept.":"请启动或重新连接机器人；保留当前网页，不强制跳转。";
                 return;
             }
             telegramWebContext=context;
             UpdateTelegramWebContextStatus();
-            ApplyForcedWebFollow();
+            var browser=embeddedBrowser;
+            if(connectedWebServer!=null&&browser!=null&&browser.CoreWebView2!=null)
+            {
+                Uri current;if(!Uri.TryCreate(browser.CoreWebView2.Source,UriKind.Absolute,out current)||current.GetLeftPart(UriPartial.Authority)!=connectedWebServer.GetLeftPart(UriPartial.Authority))return;
+                string target=BotRuntime.AddWebAuthToken(context.WebAddress(connectedWebServer,settings.OpenCodeServerVersion),settings).ToString();
+                await browser.CoreWebView2.ExecuteScriptAsync("window.__opencodeTelegramSync && window.__opencodeTelegramSync.accept("+json+","+JsonString(target)+","+JsonString(settings.OpenCodeServerVersion)+","+JsonString(settings.Locale)+")");
+            }
         }
         finally{webContextRefreshRunning=false;}
     }
@@ -2085,34 +2051,44 @@ sealed class DesktopApp
     {
         if(selectedPage!=6||webContextStatus==null)return;
         bool en=settings.Locale=="en";
-        string mode=settings.ResolvedWebFollowMode;
-        webFollowButton.Visibility=mode=="prompt"?Visibility.Visible:Visibility.Collapsed;
-        string hint=mode=="off"?(en?"Independent browsing · Telegram switches do not change this page.":"独立浏览 · Telegram 切换不会影响当前网页。"):
-            mode=="force"?(en?"Always follows Telegram · Unsent desktop input may be lost when switching.":"始终跟随 Telegram · 切换时电脑未发送的输入可能丢失。"):
-            (en?"Switch notices only · Your current input is kept until you click Follow.":"仅提示切换 · 点击“跟随”前，保留当前网页和输入。");
+        string hint=telegramWebContext.Busy?(en?"AI is responding. Project/session switching is blocked until it finishes.":"AI 正在回答，暂时不能切换项目或会话；回答结束后自动解除限制。"):
+            telegramWebContext.MobileActive?(en?"Following the phone's current operation.":"手机正在操作，正在跟随手机的当前操作。"):
+            (en?"Two-way sync · You can browse and choose projects while idle.":"双向同步 · 当前空闲，可以浏览并选择项目。");
         string text;
         if(!telegramWebContext.HasSession)
         {
             string directory=telegramWebContext.Project==null?null:telegramWebContext.Project.Directory;
             text=(en?"Telegram project: ":"Telegram 项目：")+(String.IsNullOrWhiteSpace(directory)?(en?"Not selected":"未选择"):directory)+Environment.NewLine+(en?"Telegram session: Not selected":"Telegram 会话：未选择");
-            if(mode!="off")hint=en?"No selected Telegram session. Use /projects, then /sessions or /new; this page is kept.":"Telegram 尚未选择会话。请使用 /projects、/sessions 或 /new；保留当前网页，不另建会话。";
-            webFollowButton.IsEnabled=false;
         }
         else
         {
-            Uri current;
-            Uri target=telegramWebContext.WebAddress(connectedWebServer??new Uri(BotRuntime.ResolveOpenCodeUrl(settings)),settings.OpenCodeServerVersion);
-            bool same=embeddedBrowser!=null&&embeddedBrowser.CoreWebView2!=null&&Uri.TryCreate(embeddedBrowser.CoreWebView2.Source,UriKind.Absolute,out current)&&current.GetLeftPart(UriPartial.Path)==target.GetLeftPart(UriPartial.Path);
             string title=String.IsNullOrWhiteSpace(telegramWebContext.Session.Title)?telegramWebContext.Session.Id:telegramWebContext.Session.Title;
             text=(en?"Telegram project: ":"Telegram 项目：")+telegramWebContext.Session.Directory+Environment.NewLine+(en?"Telegram session: ":"Telegram 会话：")+title;
-            if(same&&mode=="prompt")hint=en?"Same session · Prompts and model replies update live; type in the workspace to continue.":"同一会话 · 指令与模型回答实时更新，可在下方工作区继续输入。";
-            else if(mode=="prompt")hint=en?"Telegram is on a different session · Click Follow to switch; your draft is kept until then.":"Telegram 当前会话与网页不同 · 点击“跟随”切换，切换前保留电脑输入。";
-            webFollowButton.IsEnabled=mode=="prompt"&&webContextAvailable&&!same&&!webConnectionRunning;
         }
         if(webContextStatus.Text!=text)webContextStatus.Text=text;
         webContextStatus.ToolTip=text;
         if(webContextHint.Text!=hint)webContextHint.Text=hint;
-        webContextHint.Foreground=new SolidColorBrush(mode=="force"?Color.FromRgb(173,101,26):Color.FromRgb(105,113,133));
+        webContextHint.Foreground=new SolidColorBrush(telegramWebContext.Busy||telegramWebContext.MobileActive?Color.FromRgb(173,101,26):Color.FromRgb(105,113,133));
+    }
+    static string JsonString(string value)
+    {
+        using(var stream=new MemoryStream()){new DataContractJsonSerializer(typeof(string)).WriteObject(stream,value);return Encoding.UTF8.GetString(stream.ToArray());}
+    }
+    async Task ReceiveDesktopSyncCommand(Microsoft.Web.WebView2.Wpf.WebView2 browser,string source,string json)
+    {
+        try
+        {
+            Uri origin;if(browser!=embeddedBrowser||connectedWebServer==null||!Uri.TryCreate(source,UriKind.Absolute,out origin)||origin.GetLeftPart(UriPartial.Authority)!=connectedWebServer.GetLeftPart(UriPartial.Authority))return;
+            var match=Regex.Match(json,"\"id\"\\s*:\\s*\"([a-zA-Z0-9-]{1,80})\"");if(!match.Success)return;
+            string id=match.Groups[1].Value;
+            await Task.Run(()=>
+            {
+                string directory=Path.Combine(ProductPaths.Home,"desktop-sync");Directory.CreateDirectory(directory);
+                string file=Path.Combine(directory,"command-"+id+".json"),temp=file+".tmp";
+                File.WriteAllText(temp,json,new UTF8Encoding(false));File.Move(temp,file);
+            });
+        }
+        catch(Exception ex){if(webContextHint!=null)webContextHint.Text=(settings.Locale=="en"?"Synchronization failed: ":"同步失败：")+ex.Message;}
     }
 
     async Task StartOpenCodeWeb(string version,Uri address)
@@ -2121,7 +2097,6 @@ sealed class DesktopApp
         webConnectionRunning=true;
         var browser=embeddedBrowser;
         webStartButton.IsEnabled=false;
-        if(webFollowButton!=null)webFollowButton.IsEnabled=false;
         webStatus.Text=settings.Locale=="en"?"Connecting to OpenCode…":"正在连接 OpenCode…";
         try
         {
@@ -2131,6 +2106,9 @@ sealed class DesktopApp
                 if(embeddedBrowser!=browser)return;
                 await browser.EnsureCoreWebView2Async(environment);
                 if(embeddedBrowser!=browser)return;
+                using(var script=System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("EmbeddedWebSync.js"))
+                using(var reader=new StreamReader(script,Encoding.UTF8))await browser.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(reader.ReadToEnd());
+                browser.CoreWebView2.WebMessageReceived+=async(sender,eventArgs)=>await ReceiveDesktopSyncCommand(browser,eventArgs.Source,eventArgs.WebMessageAsJson);
                 browser.CoreWebView2.BasicAuthenticationRequested+=(sender,eventArgs)=>
                 {
                     Uri target;
@@ -2150,11 +2128,11 @@ sealed class DesktopApp
         {
             webConnectionRunning=false;
             UpdateTelegramWebContextStatus();
-            ApplyForcedWebFollow();
             if(embeddedBrowser!=null&&webStartButton!=null)webStartButton.IsEnabled=true;
             if(embeddedBrowser!=null&&embeddedBrowser!=browser&&selectedPage==6&&!shutdownRunning)
                 QueueWebReconnect();
         }
+        await RefreshTelegramWebContext();
     }
     void QueueWebReconnect()
     {
@@ -2166,13 +2144,11 @@ sealed class DesktopApp
     }
     void NavigateWeb(Uri address,bool followTelegram=false)
     {
-        Uri target=settings.ResolvedWebFollowMode=="off"&&!followTelegram?address:telegramWebContext.WebAddress(address,settings.OpenCodeServerVersion);
-        if(settings.ResolvedWebFollowMode=="off"&&!followTelegram&&lastWebAddress!=null&&lastWebAddress.GetLeftPart(UriPartial.Authority)==address.GetLeftPart(UriPartial.Authority))target=lastWebAddress;
+        Uri target=telegramWebContext.WebAddress(address,settings.OpenCodeServerVersion);
         Uri current;
         if(!followTelegram&&connectedWebServer!=null&&embeddedBrowser!=null&&embeddedBrowser.CoreWebView2!=null&&Uri.TryCreate(embeddedBrowser.CoreWebView2.Source,UriKind.Absolute,out current)&&current.GetLeftPart(UriPartial.Authority)==address.GetLeftPart(UriPartial.Authority))
             target=new Uri(current.GetLeftPart(UriPartial.Path)+current.Fragment);
         connectedWebServer=address;
-        webPendingTarget=target.GetLeftPart(UriPartial.Path);
         if(embeddedBrowser!=null&&embeddedBrowser.CoreWebView2!=null)embeddedBrowser.CoreWebView2.Navigate(BotRuntime.AddWebAuthToken(target,settings).ToString());
         UpdateTelegramWebContextStatus();
     }
@@ -2252,7 +2228,7 @@ sealed class DesktopApp
             else if(address.IsLoopback&&(webServerProcess==null||webServerProcess.HasExited))await StartOpenCodeWeb(version,address);
             await RefreshTelegramWebContext();
             Uri server=version=="v2"?new Uri(BotRuntime.ResolveOpenCodeUrl(settings)):address;
-            Uri target=settings.ResolvedWebFollowMode=="off"?server:telegramWebContext.WebAddress(server,version);
+            Uri target=telegramWebContext.WebAddress(server,version);
             Uri current;
             if(embeddedBrowser!=null&&embeddedBrowser.CoreWebView2!=null&&Uri.TryCreate(embeddedBrowser.CoreWebView2.Source,UriKind.Absolute,out current)&&current.GetLeftPart(UriPartial.Authority)==server.GetLeftPart(UriPartial.Authority))target=new Uri(current.GetLeftPart(UriPartial.Path)+current.Fragment);
             await BotRuntime.OpenExternalBrowser(target,settings);
@@ -2286,11 +2262,14 @@ sealed class DesktopApp
 
     void BuildLanguageSettings()
     {
-        AddHeading("语言与外观", "在窗口右上角切换简体中文或 English，选择后立即保存并应用。" );
+        bool en=settings.Locale=="en";
+        AddHeading(en?"Language & Appearance":"语言与外观",en?"Choose a language. Changes are saved and applied immediately.":"选择界面语言，选择后立即保存并应用。");
         var card=Card();var s=new StackPanel();card.Child=s;
-        s.Children.Add(Label("当前语言",14,true,Color.FromRgb(39,46,65)));
-        s.Children.Add(Label(settings.Locale=="en"?"English":"简体中文",20,true,Color.FromRgb(43,103,230)));
-        s.Children.Add(Label("使用窗口右上角的语言菜单切换。设置会保存在当前 Windows 用户的加密配置中。",13,false,Color.FromRgb(105,113,133)));
+        s.Children.Add(Label(en?"Interface language":"界面语言",14,true,Color.FromRgb(39,46,65)));
+        languagePicker=new ComboBox{Width=220,Height=36,HorizontalAlignment=HorizontalAlignment.Left,Margin=new Thickness(0,12,0,12),ItemsSource=new string[]{"简体中文","English"},SelectedIndex=en?1:0};
+        languagePicker.SelectionChanged+=(sender,args)=>{if(languagePicker.SelectedIndex<0)return;string locale=languagePicker.SelectedIndex==1?"en":"zh";if(settings.Locale==locale)return;string previous=settings.Locale;settings.Locale=locale;try{SettingsStore.Save(settings);ApplyLanguage();ShowPage(selectedPage);}catch(Exception ex){settings.Locale=previous;MessageBox.Show((en?"Unable to save language settings: ":"无法保存语言设置：")+ex.Message,ProductPaths.AppName,MessageBoxButton.OK,MessageBoxImage.Error);}};
+        s.Children.Add(languagePicker);
+        s.Children.Add(Label(en?"Saved in the encrypted configuration for the current Windows user.":"设置会保存在当前 Windows 用户的加密配置中。",13,false,Color.FromRgb(105,113,133)));
         content.Children.Add(card);
     }
 
@@ -2650,34 +2629,51 @@ sealed class InstallerWindow : Window
     CheckBox launchAfterInstall;
     string installedExe;
     bool english;
+    ProgressBar installProgress;
+    bool installing;
     public InstallerWindow()
     {
         english=SettingsStore.Load().Locale=="en";
-        Width=650; Height=490; WindowStartupLocation=WindowStartupLocation.CenterScreen; WindowStyle=WindowStyle.SingleBorderWindow; Background=new SolidColorBrush(Color.FromRgb(247,248,252)); ResizeMode=ResizeMode.NoResize; Title=ProductPaths.AppName;
+        Closing+=(s,e)=>{if(installing)e.Cancel=true;};
+        BuildInstallerForm();
+    }
+    void BuildInstallerForm()
+    {
+        string selectedPath=target==null?Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","OpenCodeTelegram"):target.Text;
+        Width=650; Height=550; WindowStartupLocation=WindowStartupLocation.CenterScreen; WindowStyle=WindowStyle.SingleBorderWindow; Background=new SolidColorBrush(Color.FromRgb(247,248,252)); ResizeMode=ResizeMode.NoResize; Title=ProductPaths.AppName;
         var border=new Border{CornerRadius=new CornerRadius(24),Background=new SolidColorBrush(Color.FromRgb(247,248,252)),Padding=new Thickness(34),BorderBrush=new SolidColorBrush(Color.FromRgb(226,229,237)),BorderThickness=new Thickness(1),Effect=new System.Windows.Media.Effects.DropShadowEffect{BlurRadius=32,ShadowDepth=5,Opacity=.15}};
         installerStack=new StackPanel(); border.Child=installerStack; Content=border;
+        var languageRow=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,0,16)};
+        languageRow.Children.Add(new TextBlock{Text="语言 / Language",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,0,12)});
+        var language=new ComboBox{Width=180,Height=32,ItemsSource=new string[]{"简体中文","English"},SelectedIndex=english?1:0};
+        language.SelectionChanged+=(s,e)=>{if(installing||language.SelectedIndex<0)return;bool next=language.SelectedIndex==1;if(next==english)return;english=next;BuildInstallerForm();};
+        languageRow.Children.Add(language);installerStack.Children.Add(languageRow);
         installerStack.Children.Add(new TextBlock{Text=ProductPaths.AppName,FontSize=29,FontWeight=FontWeights.SemiBold,Foreground=new SolidColorBrush(Color.FromRgb(34,40,56)),Margin=new Thickness(0,4,0,8)});
         installerStack.Children.Add(new TextBlock{Text=english?"OpenCode installer and launcher · Telegram remote control · encrypted communication":"OpenCode 安装与启动器 · Telegram 远程控制 · 加密通信",FontSize=14,Foreground=new SolidColorBrush(Color.FromRgb(108,116,137)),Margin=new Thickness(0,0,0,24),TextWrapping=TextWrapping.Wrap});
         installerStack.Children.Add(new TextBlock{Text=english?"Install location":"安装位置",FontSize=13,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,6)});
-        target=new TextBox{Text=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs","OpenCodeTelegram"),Height=40,Padding=new Thickness(12,8,12,8),FontSize=14};
+        target=new TextBox{Text=selectedPath,Height=40,Padding=new Thickness(12,8,12,8),FontSize=14};
         var pathRow=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,0,16)}; target.Margin=new Thickness(0,0,8,0); target.Width=470; pathRow.Children.Add(target);
         var browse=new Button{Content=english?"Browse…":"浏览…",Width=88,Height=40}; browse.Click+=(s,e)=>{using(var dialog=new Forms.FolderBrowserDialog()){dialog.Description=english?"Choose the installation folder":"选择安装文件夹";dialog.SelectedPath=target.Text;if(dialog.ShowDialog()==Forms.DialogResult.OK)target.Text=dialog.SelectedPath;}}; pathRow.Children.Add(browse); installerStack.Children.Add(pathRow);
         status=new TextBlock{Text=english?"The setup installs the app and creates Start menu and desktop shortcuts. You can choose whether to launch it when setup finishes.":"安装程序会安装应用并创建开始菜单和桌面快捷方式。安装结束时可选择是否立即启动。",FontSize=12,Foreground=new SolidColorBrush(Color.FromRgb(112,120,140)),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,22)}; installerStack.Children.Add(status);
+        installProgress=new ProgressBar{Height=8,Minimum=0,Maximum=100,Visibility=Visibility.Collapsed,Margin=new Thickness(0,0,0,16)};installerStack.Children.Add(installProgress);
         var button=new Button{Content=english?"Install":"安装",Height=46,FontSize=15,FontWeight=FontWeights.SemiBold,Foreground=Brushes.White,Background=new SolidColorBrush(Color.FromRgb(43,103,230)),BorderThickness=new Thickness(0),Cursor=Cursors.Hand}; button.Click+=async(s,e)=>await Install(); installerStack.Children.Add(button);
     }
     async Task Install()
     {
         string dest=target.Text.Trim();
+        if(installing)return;
         if(String.IsNullOrWhiteSpace(dest)){status.Text=english?"Choose an installation folder.":"请选择安装目录。";return;}
+        installing=true;installProgress.Visibility=Visibility.Visible;installProgress.IsIndeterminate=true;
+        foreach(var control in installerStack.Children.OfType<UIElement>())if(control!=status&&control!=installProgress)control.IsEnabled=false;
         try
         {
             bool enableAppStartup=AppStartupSetting.IsEnabled();
             bool enableBotStartup=StartupSetting.IsEnabled();
             bool wasBotRunning=false;
             var currentSettings=SettingsStore.Load();
-            try { wasBotRunning=BotRuntime.Status(currentSettings).IndexOf("Service status: running",StringComparison.OrdinalIgnoreCase)>=0; } catch { }
+            currentSettings.Locale=english?"en":"zh";SettingsStore.Save(currentSettings);
             status.Text=english?"Stopping the running Bot…":"正在停止已运行的 Bot…";
-            if(wasBotRunning) { try { BotRuntime.Execute("stop",currentSettings,20); } catch { } }
+            await Task.Run(()=>{try { wasBotRunning=BotRuntime.Status(currentSettings).IndexOf("Service status: running",StringComparison.OrdinalIgnoreCase)>=0; } catch { } if(wasBotRunning) { try { BotRuntime.Execute("stop",currentSettings,20); } catch { } }});
             Environment.SetEnvironmentVariable(ProductPaths.EnvRoot,dest);
             foreach(var running in Process.GetProcessesByName("OpenCodeTelegram")) { try { if(String.Equals(running.MainModule.FileName,Path.Combine(dest,"OpenCodeTelegram.exe"),StringComparison.OrdinalIgnoreCase)) running.Kill(); } catch{} }
             await Task.Delay(700);
@@ -2695,6 +2691,8 @@ sealed class InstallerWindow : Window
                 {
                     if(resource==null) throw new InvalidOperationException("安装包未包含 BotRuntime.zip。");
                     using(var archive=new ZipArchive(resource,ZipArchiveMode.Read))
+                    {
+                    long total=archive.Entries.Sum(entry=>entry.Length),completed=0;int lastPercent=-1;
                     foreach(var entry in archive.Entries)
                     {
                         string output=Path.GetFullPath(Path.Combine(dest,entry.FullName));
@@ -2702,8 +2700,13 @@ sealed class InstallerWindow : Window
                         if(String.IsNullOrEmpty(entry.Name)){Directory.CreateDirectory(output);continue;}
                         Directory.CreateDirectory(Path.GetDirectoryName(output));
                         entry.ExtractToFile(output,true);
+                        completed+=entry.Length;
+                        int percent=total==0?90:(int)(completed*90/total);
+                        if(percent!=lastPercent){lastPercent=percent;Dispatcher.Invoke(new Action(()=>{installProgress.IsIndeterminate=false;installProgress.Value=percent;status.Text=(english?"Extracting runtime: ":"正在解压运行时：")+percent+"%";}));}
+                    }
                     }
                 }
+                Dispatcher.Invoke(new Action(()=>{installProgress.Value=90;status.Text=english?"Configuring the app and creating shortcuts…":"正在配置应用并创建快捷方式…";}));
                 BotRuntime.ConfigureFixedWebViewPermissions(dest);
                 installedExe=Path.Combine(dest,"OpenCodeTelegram.exe");
                 if(!File.Exists(installedExe)) throw new FileNotFoundException("Installer payload is missing the desktop app executable.",installedExe);
@@ -2732,10 +2735,12 @@ sealed class InstallerWindow : Window
                 CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),ProductPaths.AppName+".lnk"),installedExe,dest);
                 ProductRegistration.Register(dest);
             });
-            if(wasBotRunning) { status.Text=english?"Installation complete. Restarting the Bot service…":"安装完成，正在恢复 Bot 服务…"; await Task.Run(()=>BotRuntime.Start(SettingsStore.Load(),message=>Dispatcher.BeginInvoke(new Action(()=>status.Text=message)))); }
+            if(wasBotRunning) { installProgress.IsIndeterminate=true;status.Text=english?"Installation complete. Restarting the Bot service…":"安装完成，正在恢复 Bot 服务…"; await Task.Run(()=>BotRuntime.Start(SettingsStore.Load(),message=>Dispatcher.BeginInvoke(new Action(()=>status.Text=message)))); }
+            installProgress.IsIndeterminate=false;installProgress.Value=100;
             ShowCompletionPage();
         }
         catch(Exception ex){status.Text=(english?"Installation failed: ":"安装失败：")+ex.Message;}
+        finally{installing=false;installProgress.IsIndeterminate=false;foreach(var control in installerStack.Children.OfType<UIElement>())control.IsEnabled=true;}
     }
     void ShowCompletionPage()
     {

@@ -141,7 +141,7 @@ $assemblyMetadata = Join-Path $stageRoot 'AssemblyVersion.cs'
 "@ | Set-Content -LiteralPath $assemblyMetadata -Encoding UTF8
 Copy-Item -Path (Join-Path $webViewDependencies '*.dll') -Destination $bundleRoot
 $appArgs = @(
-    '/nologo', '/target:winexe', '/platform:x64', '/optimize+', "/out:$appExe", "/win32icon:$icon",
+    '/nologo', '/target:winexe', '/platform:x64', '/optimize+', "/out:$appExe", "/win32icon:$icon", "/resource:$PSScriptRoot\EmbeddedWebSync.js,EmbeddedWebSync.js",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
     "/reference:$wpf\WindowsBase.dll", "/reference:$wpf\PresentationCore.dll", "/reference:$wpf\PresentationFramework.dll",
     '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll',
@@ -165,7 +165,7 @@ try {
 if (Test-Path -LiteralPath $bundleZip) { Remove-Item -LiteralPath $bundleZip -Force }
 Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $bundleZip -CompressionLevel Optimal
 $setupArgs = @(
-    '/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/define:SETUP_BUILD', "/out:$setupExe", "/win32icon:$icon", "/resource:$bundleZip,BotRuntime.zip",
+    '/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/define:SETUP_BUILD', "/out:$setupExe", "/win32icon:$icon", "/resource:$bundleZip,BotRuntime.zip", "/resource:$PSScriptRoot\EmbeddedWebSync.js,EmbeddedWebSync.js",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
     "/reference:$wpf\WindowsBase.dll", "/reference:$wpf\PresentationCore.dll", "/reference:$wpf\PresentationFramework.dll",
     '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll',

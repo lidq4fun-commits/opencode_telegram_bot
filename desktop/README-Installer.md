@@ -46,17 +46,11 @@ The release ZIP contains the standalone setup EXE and this README. The EXE may b
 
 “启动设置”与“Bot CLI”是独立页面。Bot CLI 支持回车执行、上下键历史、交互隐藏输入和停止当前命令；页面列出实际支持的命令与配置键。网页页面进入后自动连接远程服务或启动本机服务，不需要再点击启动。
 
-网页页面从 Bot 的 `settings.json` 读取当前项目与会话。打开同一个 OpenCode 原生会话后，Telegram 发给模型的任务、模型回答与电脑输入共享一份会话历史，实时更新。Telegram 的 `/projects` 等 Bot 管理命令不属于模型对话，不复制到网页。
+内嵌网页与手机默认双向强制同步项目、会话、模型和思考程度，不再提供跟随方式选项或设置卡片。任一端选择项目、会话或模型后，另一端采用同一状态；电脑发起任务前先确认 Bot 已跟随该原生会话，随后共享任务和回答的实时历史。Telegram 的 `/projects` 等管理命令不属于模型对话，不复制到网页。
 
-页面提供三种跟随方式，选择后立即生效，并通过 Windows DPAPI 保存，重启后仍保留：
+空闲时可打开左上角项目列表、浏览和选择项目，不会被定时轮询拉回旧聊天。手机有新操作或 AI 正在回答时才强制回到共享界面，并显示跟随或阻止切换的原因；回答结束后自动恢复项目与会话切换。模型同步保留已持久化的电脑草稿；强制切换到不同会话时应先保存尚未发送的输入。
 
-| 方式 | 作用 |
-| --- | --- |
-| 不跟随 | 独立浏览。进入时打开本次桌面运行期间上次浏览的页面，没有则打开首页；Telegram 切换不影响网页，CLI `web open` 打开独立首页。 |
-| 提示跟随（默认） | 进入时打开 Telegram 会话；之后切换只提示，点击“跟随”才跳转。未点击前保留电脑输入。 |
-| 强制跟随 | 始终保持 Telegram 当前会话，自动跟随切换，手动浏览其他会话也会被拉回。切换可能丢失电脑尚未发送的输入。 |
-
-选项说明以并排卡片展示，可点击“收起选项”给对话留出更多空间，会话信息和切换提示仍保留。未选择 Telegram 会话时，不会悄悄创建新会话或强制清空现有网页。网页内手动选择其他会话不会修改 Bot 的选择。
+同步元数据与操作回执位于应用数据目录的 `desktop-sync`，仅通过本机文件通信，不新增端口，也不在该通道传递提示词、Token 或密码。Bot 是设置文件的唯一写入者；旧操作、旧 Bot 进程和手机操作期间的冲突操作会被拒绝。Bot 未启动或状态过期时保留浏览页面，并提示重新连接，电脑不会在未确认同步时发起模型任务。外部默认浏览器仍只是同一服务的独立浏览入口，不在本次双向同步范围内。
 
 本机 V2 的“在默认浏览器打开”和 CLI `web open` 使用 OpenCode 原生配对会话 Cookie，刷新后无需重新登录，并保留原来的项目、会话和页面位置。一次性本机跳转只监听回环地址，成功后立即停止，未完成则最多等待 60 秒；Cookie 保留原生 HttpOnly 等标记，密码和会话 Cookie 不写入应用文件，也不放进最终页面 URL。远程服务和 V1 沿用原有入口，不改变其认证方式。
 
@@ -66,4 +60,8 @@ The release ZIP contains the standalone setup EXE and this README. The EXE may b
 .\desktop\tests\Test-TelegramWebContext.ps1 -AssemblyPath <新源码编译的OpenCodeTelegram.exe路径>
 .\desktop\tests\Test-BrowserLogin.ps1 -AssemblyPath <新源码编译的OpenCodeTelegram.exe路径>
 .\desktop\tests\Test-OfflineDependencies.ps1 -AssemblyPath <完整暂存包中的OpenCodeTelegram.exe路径>
+node --test .\desktop\tests\Test-EmbeddedWebSync.mjs
 ```
+## 第一个可用版本 / First usable release
+
+**1.0.15** 是用户确认的第一个可用桌面版本，Git 基线标签为 `desktop-v1.0.15`。发布内容、验证范围与安装包 SHA256 见 [版本说明](releases/desktop-v1.0.15.md)。后续开发以此版本为可用基线；安装包保存在 `desktop/artifacts/`，不纳入 Git。

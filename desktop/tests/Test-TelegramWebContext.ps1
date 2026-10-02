@@ -56,9 +56,9 @@ $previousHome = [Environment]::GetEnvironmentVariable('OPENCODE_TELEGRAM_HOME')
 try {
     [Environment]::SetEnvironmentVariable('OPENCODE_TELEGRAM_HOME', $testRoot)
     $desktopSettings = [Activator]::CreateInstance($assembly.GetType('DesktopSettings'), $true)
-    Assert-True ($desktopSettings.ResolvedWebFollowMode -eq 'prompt') 'Existing settings default to prompt-follow'
+    Assert-True ($desktopSettings.ResolvedWebFollowMode -eq 'force') 'Existing settings always use forced synchronization'
     $desktopSettings.WebFollowMode = 'unknown'
-    Assert-True ($desktopSettings.ResolvedWebFollowMode -eq 'prompt') 'Unknown follow modes safely default to prompt-follow'
+    Assert-True ($desktopSettings.ResolvedWebFollowMode -eq 'force') 'Unknown legacy modes cannot disable synchronization'
     $desktopSettings.WebFollowMode = 'prompt'
     $desktopSettings.OpenCodeServerVersion = 'v2'
     $desktopSettings.OpenCodeUrl = $server.AbsoluteUri
@@ -70,11 +70,11 @@ try {
         $desktopSettings.WebFollowMode = $mode
         $assembly.GetType('SettingsStore').GetMethod('Save', $flags).Invoke($null, $arguments)
         $saved = $assembly.GetType('SettingsStore').GetMethod('Load', $flags).Invoke($null, $null)
-        Assert-True ($saved.ResolvedWebFollowMode -eq $mode) "Follow mode persists across restart: $mode"
+        Assert-True ($saved.ResolvedWebFollowMode -eq 'force') "Legacy mode always resolves to synchronization after restart: $mode"
     }
     $desktopSettings.WebFollowMode = 'off'
     $url = $assembly.GetType('Cli').GetMethod('GetSelectedWebUrl', [Reflection.BindingFlags]'NonPublic,Static').Invoke($null, $arguments)
-    Assert-True ($url -eq $server) 'No-follow opens the independent web home instead of the Telegram session'
+    Assert-True ($url -eq $result.Context.WebAddress($server, 'v2')) 'Legacy no-follow settings cannot open an independent workspace'
 } finally {
     [Environment]::SetEnvironmentVariable('OPENCODE_TELEGRAM_HOME', $previousHome)
 }
@@ -90,4 +90,30 @@ Assert-True ($result.Loaded -and -not $result.Context.HasSession) 'A cleared pri
 [IO.File]::WriteAllText($backup, '{invalid')
 $result = Read-Context
 Assert-True (-not $result.Loaded) 'Unreadable state is reported without navigating or overwriting it'
+
+$syncDirectory = Join-Path $testRoot 'desktop-sync'
+New-Item -ItemType Directory -Path $syncDirectory | Out-Null
+$syncFile = Join-Path $syncDirectory 'state.json'
+$syncLoad = $type.GetMethod('TryLoadSync', $flags)
+$syncArguments = New-Object object[] 3
+$syncArguments[0] = $testRoot.ToString()
+$syncValue = @{
+    instance = 'test-instance'; mobileRevision = 2; mobileActive = $false; busy = $true
+    updatedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    currentProject = @{ worktree = 'E:\projects\demo' }
+    currentSession = @{ id = 'ses_sync'; directory = 'E:\projects\demo'; title = 'Shared' }
+    currentModel = @{ providerID = 'provider'; modelID = 'model'; variant = 'high' }
+    acknowledgements = @(@{ id = 'command-test'; reason = $null })
+}
+[IO.File]::WriteAllText($syncFile, ($syncValue | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
+Assert-True ($syncLoad.Invoke($null, $syncArguments)) 'Fresh bot synchronization state is available'
+Assert-True ($syncArguments[1].Busy -and $syncArguments[1].MobileRevision -eq 2) 'Answer lock and mobile operation revision are decoded'
+Assert-True ($syncArguments[2].Contains('acknowledgements')) 'Raw metadata preserves model and desktop acknowledgements for the embedded page'
+$syncValue.updatedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - 10000
+[IO.File]::WriteAllText($syncFile, ($syncValue | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
+Assert-True (-not $syncLoad.Invoke($null, $syncArguments)) 'A stopped bot cannot leave a permanent answer lock'
+$syncValue.currentSession = $null
+[IO.File]::WriteAllText($primary, ($syncValue | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
+$result = Read-Context
+Assert-True ($result.Context.WebAddress($server, 'v1').AbsolutePath.EndsWith('/session')) 'A phone project without a session opens the V1 project workspace without creating a conversation'
 Write-Output 'All Telegram web context checks passed; only isolated temporary fixtures were written.'

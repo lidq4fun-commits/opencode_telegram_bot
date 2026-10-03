@@ -1,0 +1,9 @@
+{
+  "platform": "darwin-arm64",
+  "dependencies": [
+    { "name": "Git source", "version": "2.56.0", "archive": "git-2.56.0.tar.xz", "url": "https://www.kernel.org/pub/software/scm/git/git-2.56.0.tar.xz", "sha256": "26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3" },
+    { "name": "Node.js", "version": "24.15.0", "archive": "node-arm64.tar.gz", "url": "https://nodejs.org/dist/v24.15.0/node-v24.15.0-darwin-arm64.tar.gz", "sha256": "372331b969779ab5d15b949884fc6eaf88d5afe87bde8ba881d6400b9100ffc4" },
+    { "name": "Bun", "version": "1.4.2", "archive": "bun-arm64.zip", "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-darwin-aarch64.zip", "sha256": "90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f" },
+    { "name": "OpenCode V2", "version": "2.0.22", "archive": "opencode-v2.tgz", "url": "https://registry.npmjs.org/@opencode/cli-darwin-arm64/-/cli-darwin-arm64-2.0.22.tgz", "integrity": "sha512-NNg1VCCTWSfLlNKpRb4RA6IE7H67ZBLBYmfIWjP3CxR9NPtdROQFCL8lpPf+Tz2Qje4Bb27sQOLWanYyNT/9dQ==" }
+  ]
+}

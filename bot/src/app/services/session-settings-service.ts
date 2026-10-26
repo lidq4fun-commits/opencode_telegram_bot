@@ -1,7 +1,7 @@
 /**
  * Session Settings Service - adopts the agent and model a session last ran with
  */
-import type { Session } from "@opencode-ai/sdk/v2";
+import type { Session } from "../../opencode/types.js";
 import { selectAgent } from "./agent-selection-service.js";
 import { selectModel } from "./model-selection-service.js";
 import { logger } from "../../utils/logger.js";

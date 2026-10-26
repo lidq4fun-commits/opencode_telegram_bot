@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpencodeClient } from "@opencode-ai/sdk/v2";
+type OpencodeClient = ReturnType<typeof createV2OpencodeClient>;
 import { isExpectedOpencodeUnavailableError } from "../../../src/utils/opencode-error.js";
 
 const fake = vi.hoisted(() => ({

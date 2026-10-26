@@ -46,7 +46,7 @@ describe("opencode/process", () => {
   });
 
   it("builds opencode serve command with the configured local port", () => {
-    const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v1");
+    const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v2");
 
     if (process.platform === "win32") {
       expect(command.windowsHide).toBe(true);
@@ -55,18 +55,18 @@ describe("opencode/process", () => {
       // Otherwise, spawn() will likely fail with ENOENT on default npm installs where
       // only opencode.cmd is on PATH.
       if (command.command.toLowerCase() === "cmd.exe") {
-        expect(command.args).toEqual(["/c", "opencode", "serve", "--port", "4987"]);
+        expect(command.args).toEqual(["/c", "opencode", "serve", "--service", "--port", "4987"]);
       } else {
         expect(path.isAbsolute(command.command)).toBe(true);
         expect(command.command.toLowerCase().endsWith("\\opencode.exe")).toBe(true);
-        expect(command.args).toEqual(["serve", "--port", "4987"]);
+        expect(command.args).toEqual(["serve", "--service", "--port", "4987"]);
       }
       return;
     }
 
     expect(command).toEqual({
       command: "opencode",
-      args: ["serve", "--port", "4987"],
+      args: ["serve", "--service", "--port", "4987"],
       windowsHide: false,
     });
   });
@@ -107,10 +107,10 @@ describe("opencode/process", () => {
     try {
       process.env.PATH = "";
 
-      const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v1");
+      const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v2");
       expect(command).toEqual({
         command: "cmd.exe",
-        args: ["/c", "opencode", "serve", "--port", "4987"],
+        args: ["/c", "opencode", "serve", "--service", "--port", "4987"],
         windowsHide: true,
       });
     } finally {
@@ -135,10 +135,10 @@ describe("opencode/process", () => {
       // Isolate PATH to only the temp dir — no npm .cmd shim on PATH
       process.env.PATH = binDir;
 
-      const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v1");
+      const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v2");
       expect(command).toEqual({
         command: exePath,
-        args: ["serve", "--port", "4987"],
+        args: ["serve", "--service", "--port", "4987"],
         windowsHide: true,
       });
     } finally {
@@ -165,10 +165,10 @@ describe("opencode/process", () => {
 
       process.env.PATH = [binDir, originalPath].filter(Boolean).join(path.delimiter);
 
-      const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v1");
+      const command = createOpencodeServeSpawnCommand({ host: "localhost", port: 4987 }, "v2");
       expect(command).toEqual({
         command: exePath,
-        args: ["serve", "--port", "4987"],
+        args: ["serve", "--service", "--port", "4987"],
         windowsHide: true,
       });
     } finally {

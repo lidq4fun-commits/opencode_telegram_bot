@@ -1,4 +1,4 @@
-import { Event, ToolState } from "@opencode-ai/sdk/v2";
+import type { Event, ToolState } from "../../opencode/types.js";
 import type { Bot } from "grammy";
 import type { CodeFileData } from "../formatters/summary-formatter.js";
 import { normalizePathForDisplay, prepareCodeFile } from "../formatters/summary-formatter.js";
@@ -93,11 +93,25 @@ export interface ToolFileInfo extends ToolInfo {
   fileData: CodeFileData;
 }
 
+/** An image a tool produced (screenshot, generated picture) that Telegram should show. */
+export interface ToolImageInfo {
+  sessionId: string;
+  messageId: string;
+  callId: string;
+  tool: string;
+  title?: string | undefined;
+  mime: string;
+  filename: string;
+  uri: string;
+}
+
 type ToolCallback = (toolInfo: ToolInfo) => void;
 
 type RootToolUpdateCallback = (toolInfo: ToolInfo) => void;
 
 type ToolFileCallback = (fileInfo: ToolFileInfo) => void;
+
+type ToolImageCallback = (image: ToolImageInfo) => void;
 
 type QuestionCallback = (questions: Question[], requestID: string, sessionId: string) => void;
 
@@ -306,6 +320,7 @@ export class SummaryAggregator {
   private onToolCallback: ToolCallback | null = null;
   private onRootToolUpdateCallback: RootToolUpdateCallback | null = null;
   private onToolFileCallback: ToolFileCallback | null = null;
+  private onToolImageCallback: ToolImageCallback | null = null;
   private onQuestionCallback: QuestionCallback | null = null;
   private onQuestionErrorCallback: QuestionErrorCallback | null = null;
   private onThinkingCallback: ThinkingCallback | null = null;
@@ -379,6 +394,10 @@ export class SummaryAggregator {
 
   setOnToolFile(callback: ToolFileCallback): void {
     this.onToolFileCallback = callback;
+  }
+
+  setOnToolImage(callback: ToolImageCallback): void {
+    this.onToolImageCallback = callback;
   }
 
   setOnQuestion(callback: QuestionCallback): void {
@@ -1703,6 +1722,29 @@ export class SummaryAggregator {
             const callback = this.onFileChangeCallback;
             const fileChange = preparedFileContext.fileChange;
             this.scheduleOutbound(() => callback(part.sessionID, fileChange), false);
+          }
+
+          const toolImages = state.attachments?.filter((attachment) =>
+            attachment.mime.toLowerCase().startsWith("image/"),
+          );
+          if (toolImages && toolImages.length > 0 && this.onToolImageCallback) {
+            const imageCallback = this.onToolImageCallback;
+            for (const image of toolImages) {
+              const imageInfo: ToolImageInfo = {
+                sessionId: part.sessionID,
+                messageId: messageID,
+                callId: part.callID,
+                tool: part.tool,
+                title,
+                mime: image.mime,
+                filename: image.filename || `${part.tool}-${part.callID}.png`,
+                uri: image.url,
+              };
+              logger.debug(
+                `[Aggregator] Sending ${part.tool} image: ${imageInfo.filename} (${image.mime})`,
+              );
+              this.scheduleOutbound(() => imageCallback(imageInfo), false);
+            }
           }
         }
       }

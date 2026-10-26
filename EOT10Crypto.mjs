@@ -56,7 +56,19 @@ const richTextKeys = new Set(["text", "caption", "credit", "summary", "title", "
 
 function encryptRichText(value, salt, derivedKey) {
   if (typeof value === "string") return value.length > 0 ? encryptEot10WithKey(value, salt, derivedKey) : value;
-  if (Array.isArray(value)) return value.map(item => encryptRichText(item, salt, derivedKey));
+  if (Array.isArray(value)) {
+    // Telegram coalesces adjacent string leaves into one TL text field. Merge
+    // plaintext first so that field contains one complete authenticated envelope.
+    const merged = [];
+    for (const item of value) {
+      if (typeof item === "string" && typeof merged[merged.length - 1] === "string") {
+        merged[merged.length - 1] += item;
+      } else {
+        merged.push(item);
+      }
+    }
+    return merged.map(item => encryptRichText(item, salt, derivedKey));
+  }
   if (!value || typeof value !== "object") return value;
   if (value.type === "button" || value.type === "buttons") return value;
   return Object.fromEntries(Object.entries(value).map(([fieldName, item]) => [
@@ -212,9 +224,23 @@ export function isEot10Message(value) {
 
 // Keep encrypted envelopes below Telegram's 4096-character message ceiling.
 export function encryptEot10Parts(plaintext, maxPlaintextChars = 2850) {
+  if (!Number.isInteger(maxPlaintextChars) || maxPlaintextChars < 1) throw new Error("Invalid EOT10 chunk size");
   const parts = [];
-  for (let offset = 0; offset < plaintext.length; offset += maxPlaintextChars) {
-    parts.push(encryptEot10(plaintext.slice(offset, offset + maxPlaintextChars)));
+  const overhead = encryptEot10("").length;
+  // Both the ciphertext and JSON envelope are base64 encoded.
+  const maxBytes = Math.floor((4096 - overhead - 4) * 9 / 16);
+  let chunk = "";
+  let bytes = 0;
+  for (const character of plaintext) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (chunk && (bytes + size > maxBytes || chunk.length + character.length > maxPlaintextChars)) {
+      parts.push(encryptEot10(chunk));
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += character;
+    bytes += size;
   }
+  if (chunk) parts.push(encryptEot10(chunk));
   return parts;
 }

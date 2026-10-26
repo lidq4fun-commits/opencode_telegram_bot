@@ -3,7 +3,7 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Context } from "grammy";
-import type { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "../../../src/opencode/types.js";
 import { setRuntimeMode } from "../../../src/runtime/mode.js";
 import { resetSingletonState } from "../../helpers/reset-singleton-state.js";
 import { defined } from "../../helpers/defined.js";

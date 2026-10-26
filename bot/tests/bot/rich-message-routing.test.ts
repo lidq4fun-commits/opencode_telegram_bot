@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../../src/bot/handlers/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/bot/handlers/prompt.js")>()),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
+}));
 import { Bot, type Context } from "grammy";
 import type { RichBlock, Update, UserFromGetMe } from "grammy/types";
 import { config } from "../../src/config.js";
@@ -279,9 +283,7 @@ describe("bot/rich-message-routing", () => {
 
     expect(promptQueue.list()).toEqual([
       expect.objectContaining({
-        text: "",
-        photos: [expect.objectContaining({ fileId: "photo-1", source: "rich" })],
-        mediaBytes: 512,
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
       }),
     ]);
     expect(mocked.queuePromptForMerging).not.toHaveBeenCalled();

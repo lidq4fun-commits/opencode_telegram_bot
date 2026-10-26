@@ -84,6 +84,10 @@ export const zh: I18nDictionary = {
     "⚠️ 活动会话与所选项目不匹配，因此已重置。使用 /sessions 选择一个会话，或 /new 创建新会话。",
   "bot.prompt_send_error": "向 OpenCode 发送请求失败。",
   "bot.session_error": "🔴 OpenCode 返回错误：{message}",
+  "bot.model_unavailable_retrying":
+    "⚠️ OpenCode 暂时无法加载模型 provider（网络或 VPN 波动）。正在自动重试…（{attempt}/{total}）",
+  "bot.model_unavailable_failed":
+    "🔴 OpenCode 无法加载模型 provider，自动重试 3 次仍未成功。请检查网络或 VPN 后重新发送。\n{message}",
   "bot.assistant_reply_undelivered":
     "⚠️ The last assistant reply could not be delivered. Send your message again if you still need it.",
   "bot.stale_messages_skipped":

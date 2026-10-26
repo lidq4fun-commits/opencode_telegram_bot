@@ -25,13 +25,15 @@ try {
     $cache.Clear()
     $inventory = Get-Content -Raw -LiteralPath (Join-Path $root 'offline-dependencies.json') | ConvertFrom-Json
     Assert-True ($assembly.GetName().Version.ToString(3) -eq $inventory.release) 'Desktop assembly version matches the packaged release inventory'
-    foreach ($file in @('runtime\node.exe', 'runtime\node_modules\npm\bin\npm-cli.js', 'dependencies\bun\bun.exe', 'dependencies\git\cmd\git.exe', 'dependencies\git\bin\bash.exe', 'dependencies\opencode\v1\opencode.exe', 'dependencies\opencode\v2\opencode.exe', 'dependencies\webview2\msedgewebview2.exe', 'dependencies\licenses\OpenCode-LICENSE.txt', 'dependencies\licenses\Bun-LICENSE.md')) {
+    foreach ($file in @('runtime\node.exe', 'runtime\node_modules\npm\bin\npm-cli.js', 'dependencies\bun\bun.exe', 'dependencies\git\cmd\git.exe', 'dependencies\git\bin\bash.exe', 'dependencies\opencode\v2\opencode.exe', 'dependencies\webview2\msedgewebview2.exe', 'dependencies\licenses\OpenCode-LICENSE.txt', 'dependencies\licenses\Bun-LICENSE.md')) {
         Assert-True (Test-Path -LiteralPath (Join-Path $root $file)) "Payload contains $file"
     }
     $settings = [Activator]::CreateInstance($assembly.GetType('DesktopSettings'), $true)
-    foreach ($version in @('v1', 'v2')) {
+    Assert-True (-not (Test-Path (Join-Path $root 'dependencies\opencode\v1'))) 'Payload excludes the V1 engine'
+    Assert-True (-not (Test-Path (Join-Path $root 'bot\node_modules\@opencode-ai\sdk'))) 'Payload excludes the V1 SDK'
+    foreach ($version in @('v2')) {
         $settings.OpenCodeServerVersion = $version
-        $settings.OpenCodeExecutable = Join-Path $root 'dependencies\opencode\v1\opencode.exe'
+        $settings.OpenCodeExecutable = Join-Path $root 'dependencies\opencode\v2\opencode.exe'
         $selected = Invoke-Static 'ResolveOpenCodeExecutable' @($settings)
         Assert-True ($selected -eq (Join-Path $root "dependencies\opencode\$version\opencode.exe")) "Managed offline engine follows the selected API $version"
         $output = & $selected --version

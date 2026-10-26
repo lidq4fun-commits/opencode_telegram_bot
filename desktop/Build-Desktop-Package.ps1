@@ -28,7 +28,7 @@ $icon = Join-Path $repoRoot 'OpenCodeTelegramLauncher.ico'
 & (Join-Path $PSScriptRoot 'Restore-WebView2.ps1')
 $webViewDependencies = Join-Path $PSScriptRoot 'dependencies\webview2'
 $offlineDependencies = Join-Path $PSScriptRoot 'dependencies\offline'
-foreach ($requiredDependency in @('bun\bun.exe', 'git\cmd\git.exe', 'opencode\v1\opencode.exe', 'opencode\v2\opencode.exe', 'webview2\msedgewebview2.exe')) {
+foreach ($requiredDependency in @('bun\bun.exe', 'git\cmd\git.exe', 'opencode\v2\opencode.exe', 'webview2\msedgewebview2.exe', 'tg\tg.exe', 'tg\LICENSE')) {
     if (-not (Test-Path -LiteralPath (Join-Path $offlineDependencies $requiredDependency))) {
         throw "Complete offline payload missing: $requiredDependency. Run Restore-OfflineDependencies.ps1 with the verified official archives first."
     }
@@ -118,7 +118,7 @@ try {
 Copy-Item -LiteralPath $nodeExe -Destination $runtimeRoot -Force
 Copy-Item -LiteralPath (Join-Path $NodeHome 'LICENSE') -Destination $runtimeRoot -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath (Join-Path $NodeHome 'node_modules\npm') -Destination (Join-Path $runtimeRoot 'node_modules') -Recurse -Force
-foreach ($dependency in @('bun', 'git', 'opencode', 'webview2')) {
+foreach ($dependency in @('bun', 'git', 'opencode\v2', 'webview2', 'tg')) {
     & robocopy.exe (Join-Path $offlineDependencies $dependency) (Join-Path $bundleRoot "dependencies\$dependency") @(
         '/E', '/XJ', '/COPY:DAT', '/DCOPY:DAT', '/R:2', '/W:1', '/NFL', '/NDL', '/NJH', '/NJS'
     )
@@ -140,6 +140,8 @@ $assemblyMetadata = Join-Path $stageRoot 'AssemblyVersion.cs'
 [assembly: System.Reflection.AssemblyInformationalVersion("$Version")]
 "@ | Set-Content -LiteralPath $assemblyMetadata -Encoding UTF8
 Copy-Item -Path (Join-Path $webViewDependencies '*.dll') -Destination $bundleRoot
+$sources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter '*.cs' | Sort-Object Name | ForEach-Object { $_.FullName })
+if ($sources.Count -eq 0) { throw 'Desktop sources are missing: desktop/src/*.cs' }
 $appArgs = @(
     '/nologo', '/target:winexe', '/platform:x64', '/optimize+', "/out:$appExe", "/win32icon:$icon", "/resource:$PSScriptRoot\EmbeddedWebSync.js,EmbeddedWebSync.js",
     '/reference:System.dll', '/reference:System.Core.dll', '/reference:System.Xaml.dll',
@@ -149,10 +151,14 @@ $appArgs = @(
     '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
     "/reference:$webViewDependencies\Microsoft.Web.WebView2.Core.dll", "/reference:$webViewDependencies\Microsoft.Web.WebView2.Wpf.dll",
-    (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs'), $assemblyMetadata
+    $sources
+    $assemblyMetadata
 )
 & $csc @appArgs
 if ($LASTEXITCODE -ne 0) { throw "Desktop app compilation failed with exit code $LASTEXITCODE." }
+$compiledVersion = [Reflection.AssemblyName]::GetAssemblyName($appExe).Version
+$expectedVersion = [version]($parsedVersion.ToString(3) + '.0')
+if ($compiledVersion -ne $expectedVersion) { throw "Desktop app compiled without the release version: $compiledVersion instead of $expectedVersion." }
 
 Push-Location $botBundle
 try {
@@ -173,7 +179,8 @@ $setupArgs = @(
     '/reference:System.Windows.Forms.dll',
     '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll',
     "/reference:$webViewDependencies\Microsoft.Web.WebView2.Core.dll", "/reference:$webViewDependencies\Microsoft.Web.WebView2.Wpf.dll",
-    (Join-Path $PSScriptRoot 'OpenCodeTelegram.Desktop.cs'), $assemblyMetadata
+    $sources
+    $assemblyMetadata
 )
 & $csc @setupArgs
 if ($LASTEXITCODE -ne 0) { throw "Self-extracting setup compilation failed with exit code $LASTEXITCODE." }

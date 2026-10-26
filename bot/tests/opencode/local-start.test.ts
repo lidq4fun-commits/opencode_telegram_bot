@@ -7,6 +7,9 @@ const mocked = vi.hoisted(() => ({
   serverVersion: "v2" as "v1" | "v2",
   loggerWarnMock: vi.fn(),
   loggerErrorMock: vi.fn(),
+  configObject: {
+    opencode: { apiUrl: "http://127.0.0.1:4097", managedByDesktop: false },
+  },
 }));
 
 vi.mock("../../src/opencode/client.js", () => ({
@@ -24,9 +27,7 @@ vi.mock("../../src/opencode/process.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../src/config.js", () => ({
-  config: {
-    opencode: { apiUrl: "http://127.0.0.1:4097" },
-  },
+  config: mocked.configObject,
 }));
 
 vi.mock("../../src/utils/logger.js", () => ({
@@ -51,6 +52,7 @@ describe("opencode/local-start", () => {
   beforeEach(() => {
     __resetServerHealthStateForTests();
     mocked.serverVersion = "v2";
+    mocked.configObject.opencode.managedByDesktop = false;
     mocked.probeMock.mockReset();
     mocked.probeMock.mockResolvedValue({ kind: "none" });
     mocked.findRegisteredMock.mockReset();
@@ -65,6 +67,18 @@ describe("opencode/local-start", () => {
     await expect(canStartLocalOpencodeServer(TARGET, "always")).resolves.toBe(true);
     expect(mocked.loggerErrorMock).not.toHaveBeenCalled();
     expect(mocked.loggerWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("never starts a competing engine when the desktop launcher owns the server", async () => {
+    mocked.configObject.opencode.managedByDesktop = true;
+
+    await expect(canStartLocalOpencodeServer(TARGET, "always")).resolves.toBe(false);
+
+    expect(mocked.loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("desktop launcher owns"),
+    );
+    expect(mocked.probeMock).not.toHaveBeenCalled();
+    expect(mocked.readLocalVersionMock).not.toHaveBeenCalled();
   });
 
   it("refuses when the configured address rejects the credentials", async () => {

@@ -93,8 +93,13 @@ import {
   readProvidersWhenListed,
   reconcileStoredModelSelection,
   searchModels,
+  seedModelCatalogFromDisk,
   startModelCatalogWarmup,
 } from "../../../src/app/services/model-selection-service.js";
+import {
+  readModelCatalogCache,
+  writeModelCatalogCache,
+} from "../../../src/app/services/model-catalog-cache.js";
 
 function createProvidersResponse(modelsByProvider: Record<string, string[]>) {
   return {
@@ -112,16 +117,23 @@ describe("app/services/model-selection-service", () => {
   let tempDir = "";
   let originalXdgStateHome: string | undefined;
   let originalHome: string | undefined;
+  let originalAppHome: string | undefined;
+  let originalRuntimeMode: string | undefined;
 
   beforeEach(() => {
     originalXdgStateHome = process.env.XDG_STATE_HOME;
     originalHome = process.env.HOME;
+    originalAppHome = process.env.OPENCODE_TELEGRAM_HOME;
+    originalRuntimeMode = process.env.OPENCODE_TELEGRAM_RUNTIME_MODE;
 
     vi.useRealTimers();
     resetCurrentModelState();
     __resetModelCatalogCacheForTests();
     // Menu reads wait for the providers named in model.json; never read the real one.
     process.env.XDG_STATE_HOME = path.join(os.tmpdir(), "opencode-model-test-no-state");
+    // The catalog cache is written under the app home; keep it away from the real one.
+    process.env.OPENCODE_TELEGRAM_RUNTIME_MODE = "installed";
+    process.env.OPENCODE_TELEGRAM_HOME = path.join(os.tmpdir(), "opencode-model-test-no-home");
 
     loggerInfoMock.mockReset();
     loggerWarnMock.mockReset();
@@ -142,6 +154,8 @@ describe("app/services/model-selection-service", () => {
   afterEach(async () => {
     process.env.XDG_STATE_HOME = originalXdgStateHome;
     process.env.HOME = originalHome;
+    process.env.OPENCODE_TELEGRAM_HOME = originalAppHome;
+    process.env.OPENCODE_TELEGRAM_RUNTIME_MODE = originalRuntimeMode;
     vi.useRealTimers();
 
     if (tempDir) {
@@ -329,6 +343,65 @@ describe("app/services/model-selection-service", () => {
         (m) => m.providerID === "opencode" && m.modelID === "big-pickle",
       ).length;
       expect(opencodeBigPickleCount).toBe(1);
+    });
+
+    it("offers the selected model first even when OpenCode model state does not list it", async () => {
+      setCurrentModelState({ providerID: "opencode-go", modelID: "deepseek-v4.1-flash" });
+      providersMock.mockResolvedValue(
+        createProvidersResponse({
+          opencode: ["big-pickle"],
+          openai: ["gpt-4o"],
+          "opencode-go": ["deepseek-v4.1-flash"],
+        }),
+      );
+      await setupMockModelFile({
+        favorite: [{ providerID: "openai", modelID: "gpt-4o" }],
+        recent: [],
+      });
+
+      const result = await getModelSelectionLists();
+
+      expect(result.favorites).toEqual([
+        { providerID: "opencode-go", modelID: "deepseek-v4.1-flash" },
+        { providerID: "openai", modelID: "gpt-4o" },
+        { providerID: "opencode", modelID: "big-pickle" },
+      ]);
+      expect(result.recent).toEqual([]);
+    });
+
+    it("keeps the selected model as favorite when OpenCode model state is unavailable", async () => {
+      setCurrentModelState({ providerID: "opencode-go", modelID: "deepseek-v4.1-flash" });
+      tempDir = await mkdtemp(path.join(os.tmpdir(), "opencode-model-test-"));
+      process.env.XDG_STATE_HOME = path.join(tempDir, "nonexistent");
+
+      const result = await getModelSelectionLists();
+
+      expect(result.favorites).toEqual([
+        { providerID: "opencode-go", modelID: "deepseek-v4.1-flash" },
+        { providerID: "opencode", modelID: "big-pickle" },
+      ]);
+      expect(result.recent).toEqual([]);
+    });
+
+    it("does not duplicate the selected model when OpenCode model state lists it too", async () => {
+      setCurrentModelState({ providerID: "opencode-go", modelID: "deepseek-v4.1-flash" });
+      providersMock.mockResolvedValue(
+        createProvidersResponse({
+          opencode: ["big-pickle"],
+          "opencode-go": ["deepseek-v4.1-flash"],
+        }),
+      );
+      await setupMockModelFile({
+        favorite: [{ providerID: "opencode-go", modelID: "deepseek-v4.1-flash" }],
+        recent: [],
+      });
+
+      const result = await getModelSelectionLists();
+
+      expect(result.favorites).toEqual([
+        { providerID: "opencode-go", modelID: "deepseek-v4.1-flash" },
+        { providerID: "opencode", modelID: "big-pickle" },
+      ]);
     });
 
     it("deduplicates recent models", async () => {
@@ -1032,6 +1105,56 @@ describe("app/services/model-selection-service", () => {
       providersMock.mockResolvedValueOnce({ data: null, error: new Error("fetch failed") });
 
       await expect(getProviderModels("openai")).resolves.toEqual([]);
+    });
+  });
+
+  describe("saved model catalog", () => {
+    async function useTempAppHome(): Promise<string> {
+      const home = await mkdtemp(path.join(os.tmpdir(), "opencode-catalog-home-"));
+      process.env.OPENCODE_TELEGRAM_HOME = home;
+      return home;
+    }
+
+    it("serves the saved catalog before the server answers", async () => {
+      await useTempAppHome();
+      await writeModelCatalogCache([
+        { id: "opencode-go", name: "OpenCode Go", models: ["kimi-k3", "deepseek-v4.1-flash"] },
+      ]);
+      providersMock.mockResolvedValue({ data: null, error: new Error("server still booting") });
+
+      await expect(seedModelCatalogFromDisk()).resolves.toBe(true);
+
+      await expect(getProviders()).resolves.toEqual([
+        { id: "opencode-go", name: "OpenCode Go", modelCount: 2 },
+      ]);
+      await expect(getProviderModels("opencode-go")).resolves.toEqual([
+        { providerID: "opencode-go", modelID: "deepseek-v4.1-flash" },
+        { providerID: "opencode-go", modelID: "kimi-k3" },
+      ]);
+      // Let the background refresh settle so it cannot leak into the next test.
+      await vi.waitFor(() => expect(providersMock).toHaveBeenCalled());
+    });
+
+    it("does not seed anything without a usable saved catalog", async () => {
+      await useTempAppHome();
+
+      await expect(seedModelCatalogFromDisk()).resolves.toBe(false);
+      expect(providersMock).not.toHaveBeenCalled();
+    });
+
+    it("saves a complete catalog for the next start", async () => {
+      await useTempAppHome();
+      await setupMockModelFile({
+        favorite: [{ providerID: "openai", modelID: "gpt-4o" }],
+        recent: [],
+      });
+
+      await getModelSelectionLists();
+
+      await vi.waitFor(async () => {
+        const payload = await readModelCatalogCache();
+        expect(payload?.providers.map((provider) => provider.id)).toContain("openai");
+      });
     });
   });
 });

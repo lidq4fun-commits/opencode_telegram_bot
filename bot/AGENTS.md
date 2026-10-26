@@ -21,7 +21,7 @@ Functional requirements, features, and development status are in [PRODUCT.md](./
 
 - `grammy` - Telegram Bot API framework (https://grammy.dev/)
 - `@grammyjs/menu` - inline keyboards and menus
-- `@opencode-ai/sdk` - official OpenCode Server SDK
+- `@opencode/client` - official OpenCode V2 client
 - `dotenv` - environment variable loading
 
 ### Test dependencies
@@ -39,7 +39,7 @@ Functional requirements, features, and development status are in [PRODUCT.md](./
 ### Main components
 
 1. **Bot Layer** - grammY setup, middleware, commands, callback handlers
-2. **OpenCode Client Layer** - SDK wrapper and SSE event subscription
+2. **OpenCode Client Layer** - V2 client adapter, internal normalized types and event subscription
 3. **State Managers** - session/project/settings/question/permission/model/agent/variant/keyboard/pinned
 4. **Summary Pipeline** - event aggregation and Telegram-friendly formatting
 5. **Process Manager** - local OpenCode server process start, stop, and status
@@ -248,25 +248,22 @@ Important:
 
 ## OpenCode SDK quick reference
 
-The example below is the V1 client. OpenCode V2 goes through `@opencode/client`, wrapped in `src/opencode/v2/`.
+Only OpenCode V2 is supported. Use `@opencode/client` through `src/opencode/v2/` and the internal bot contract in `src/opencode/types.ts`; do not reintroduce the removed V1 SDK. The following example uses the bot adapter rather than the native V2 API.
 
 ```typescript
-import { createOpencodeClient } from "@opencode-ai/sdk";
-
-const client = createOpencodeClient({ baseUrl: "http://localhost:4096" });
+import { opencodeClient as client } from "./src/opencode/client.js";
 
 await client.global.health();
 
 await client.project.list();
-await client.project.current();
 
 await client.session.list();
-await client.session.create({ body: { title: "My session" } });
+await client.session.create({ directory: process.cwd(), title: "My session" });
 await client.session.prompt({
-  path: { id: "session-id" },
-  body: { parts: [{ type: "text", text: "Implement feature X" }] },
+  sessionID: "session-id",
+  parts: [{ type: "text", text: "Implement feature X" }],
 });
-await client.session.abort({ path: { id: "session-id" } });
+await client.session.abort({ sessionID: "session-id" });
 
 const events = await client.event.subscribe();
 for await (const event of events.stream) {
@@ -274,7 +271,7 @@ for await (const event of events.stream) {
 }
 ```
 
-Full docs: https://opencode.ai/docs/sdk
+Full V2 docs: https://opencode.ai/v2/docs/build/client
 
 ## Workflow
 

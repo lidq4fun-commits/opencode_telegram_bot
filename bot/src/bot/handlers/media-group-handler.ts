@@ -1,5 +1,5 @@
 import type { Context, NextFunction } from "grammy";
-import type { FilePartInput, Model } from "@opencode-ai/sdk/v2";
+import type { FilePartInput, Model } from "../../opencode/types.js";
 import { config } from "../../config.js";
 import { t } from "../../i18n/index.js";
 import { getModelCapabilities, supportsInput } from "../../app/services/model-capabilities-service.js";

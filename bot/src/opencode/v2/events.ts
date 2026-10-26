@@ -1,4 +1,4 @@
-import type { Event, Part, Session, ToolState } from "@opencode-ai/sdk/v2";
+import type { Event, Part, Session, ToolState } from "../types.js";
 import type { FormInfo, OpenCodeEvent, SessionInboxItem } from "@opencode/client";
 import {
   toolContentText,

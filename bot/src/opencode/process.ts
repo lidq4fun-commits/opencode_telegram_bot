@@ -136,7 +136,10 @@ export function createOpencodeServeSpawnCommand(
   version: OpencodeServerVersion,
 ): OpencodeServeSpawnCommand {
   const port = target.port.toString();
-  const serveArgs = version === "v2" ? ["serve", "--service"] : ["serve"];
+  if (version !== "v2") {
+    throw new Error("Only OpenCode V2 is supported.");
+  }
+  const serveArgs = ["serve", "--service"];
   return createOpencodeCommand([...serveArgs, "--port", port]);
 }
 

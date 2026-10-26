@@ -95,7 +95,10 @@ const DEFAULT_OPENCODE_API_URLS: Record<OpencodeServerVersion, string> = {
 
 function getOptionalOpencodeServerVersionEnvVar(key: string): OpencodeServerVersion {
   const normalized = getEnvVar(key, false).trim().toLowerCase();
-  return normalized === "v2" ? "v2" : "v1";
+  if (normalized && normalized !== "v2") {
+    throw new Error("Only OpenCode V2 is supported. Set OPENCODE_SERVER_VERSION=v2.");
+  }
+  return "v2";
 }
 
 function getOptionalMessageFormatModeEnvVar(
@@ -224,6 +227,8 @@ export const config = {
     username: getEnvVar("OPENCODE_SERVER_USERNAME", false) || "opencode",
     password: getEnvVar("OPENCODE_SERVER_PASSWORD", false),
     autoRestartEnabled: getOptionalBooleanEnvVar("OPENCODE_AUTO_RESTART_ENABLED", false),
+    // The desktop launcher owns the local OpenCode service: the Bot must never spawn a second one.
+    managedByDesktop: getEnvVar("OPENCODE_MANAGED_BY_DESKTOP", false) === "1",
     monitorIntervalSec: getOptionalPositiveIntEnvVar("OPENCODE_MONITOR_INTERVAL_SEC", 300),
     model: {
       provider: getEnvVar("OPENCODE_MODEL_PROVIDER", true), // Required

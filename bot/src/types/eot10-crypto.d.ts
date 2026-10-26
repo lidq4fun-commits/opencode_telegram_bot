@@ -19,10 +19,20 @@ declare module "*EOT10Crypto.mjs" {
     fileBytes: Buffer,
     metadata?: Partial<Eot10MediaMetadata>,
   ): Buffer;
+  export function encryptEot10MediaBufferAsync(
+    fileBytes: Buffer,
+    metadata?: Partial<Eot10MediaMetadata>,
+  ): Promise<Buffer>;
   export function decryptEot10MediaBuffer(value: Buffer): {
     buffer: Buffer;
     metadata: Eot10MediaMetadata;
   };
+  export function decryptEot10MediaBufferAsync(value: Buffer): Promise<{
+    buffer: Buffer;
+    metadata: Eot10MediaMetadata;
+  }>;
+  export function prepareEot10Key(): Promise<void>;
+  export function stopEot10Workers(): Promise<void>;
   export function isEot10MediaBuffer(value: unknown): boolean;
   export function isEot10MediaDocument(document: unknown): boolean;
   export function cacheDecryptedEot10Media(

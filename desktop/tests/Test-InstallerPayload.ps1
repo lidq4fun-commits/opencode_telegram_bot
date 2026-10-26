@@ -30,6 +30,11 @@ foreach ($file in $inventory.files) {
     if ((Get-Item -LiteralPath $path).Length -ne $file.bytes -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256) { throw "Payload checksum mismatch: $($file.path)" }
 }
 Write-Output "PASS: standalone setup embeds its complete dependency inventory ($($inventory.files.Count) verified files)"
+$tg = Join-Path $destination 'dependencies\tg\tg.exe'
+if (-not (Test-Path -LiteralPath $tg) -or -not (Test-Path -LiteralPath (Join-Path $destination 'dependencies\tg\LICENSE'))) { throw 'Telegram CLI or its license is missing' }
+& $tg --help | Out-Null
+if ($LASTEXITCODE) { throw 'Bundled Telegram CLI smoke check failed' }
+Write-Output 'PASS: official Telegram CLI and license are bundled and runnable'
 $app = Join-Path $destination 'OpenCodeTelegram.exe'
 & (Join-Path $PSScriptRoot 'Test-OfflineDependencies.ps1') -AssemblyPath $app
 Write-Output "PASS: installer payload works from a new path containing spaces: $destination"

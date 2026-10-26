@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
+}));
 import { EventEmitter } from "node:events";
 import type { Context } from "grammy";
 import type { VoiceMessageDeps } from "../../../src/bot/handlers/voice-handler.js";
@@ -197,8 +201,8 @@ describe("bot/handlers/voice-handler", () => {
     expect(processPromptMock).not.toHaveBeenCalled();
     expect(promptQueue.list()).toEqual([
       expect.objectContaining({
-        text: "run tests",
         displayText: "run tests",
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
         responseMode: "text_only",
       }),
     ]);

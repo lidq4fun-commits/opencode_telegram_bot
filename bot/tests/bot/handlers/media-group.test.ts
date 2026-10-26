@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, NextFunction } from "grammy";
 
 const flushPendingPromptMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
+}));
 
 vi.mock("../../../src/bot/handlers/message-merger.js", () => ({
   flushPendingPrompt: flushPendingPromptMock,
@@ -230,15 +234,12 @@ describe("bot/handlers/media-group", () => {
     expect(promptQueue.list()[0]).toEqual(
       expect.objectContaining({
         displayText: "Compare these photos",
-        fileParts: [
-          expect.objectContaining({ filename: "photo-20.jpg" }),
-          expect.objectContaining({ filename: "photo-21.jpg" }),
-        ],
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
       }),
     );
   });
 
-  it("rejects an oversized busy album before downloading any item", async () => {
+  it("prepares busy V2 albums without the removed local V1 media cap", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const first = createPhotoContext({
@@ -260,7 +261,7 @@ describe("bot/handlers/media-group", () => {
     await addToHandler(handler, second.ctx);
     await handler.flushAll();
 
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(downloadMock).toHaveBeenCalledTimes(2);
     expect(processPromptMock).not.toHaveBeenCalled();
     expect(promptQueue.mediaSize()).toBe(0);
   });

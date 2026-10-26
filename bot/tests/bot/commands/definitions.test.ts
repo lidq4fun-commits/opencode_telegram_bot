@@ -22,12 +22,7 @@ describe("bot/commands/definitions", () => {
     expect(BUILT_IN_COMMAND_NAMES).toContain("reload");
   });
 
-  it("leaves /reload out everywhere on V1", async () => {
-    const { BOT_COMMANDS, BUILT_IN_COMMAND_NAMES, getLocalizedBotCommands } =
-      await loadDefinitions("v1");
-
-    expect(BOT_COMMANDS.map(({ command }) => command)).not.toContain("reload");
-    expect(getLocalizedBotCommands().map(({ command }) => command)).not.toContain("reload");
-    expect(BUILT_IN_COMMAND_NAMES).not.toContain("reload");
+  it("rejects V1 configuration", async () => {
+    await expect(loadDefinitions("v1")).rejects.toThrow("Only OpenCode V2 is supported");
   });
 });

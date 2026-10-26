@@ -19,3 +19,6 @@ desktop/BundleBotRuntime.zip
 bot/node_modules/
 bot/dist/
 desktop/dependencies/
+macos/.build/
+macos/artifacts/
+macos/dependencies/

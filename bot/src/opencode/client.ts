@@ -1,4 +1,3 @@
-import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { config, type OpencodeServerVersion } from "../config.js";
 import {
   createV2OpencodeClient,
@@ -22,20 +21,13 @@ const authHeaders = (): Record<string, string> | undefined => {
 };
 
 /** The API version the bot was configured for; there is no detection or switching. */
-export const opencodeServerVersion: OpencodeServerVersion =
-  config.opencode.serverVersion === "v2" ? "v2" : "v1";
+export const opencodeServerVersion: OpencodeServerVersion = "v2";
 
 function createClient() {
   const headers = authHeaders();
-  if (opencodeServerVersion === "v2") {
-    return createV2OpencodeClient({
-      baseUrl: config.opencode.apiUrl,
-      ...(headers ? { headers } : {}),
-    });
-  }
-  return createOpencodeClient({
+  return createV2OpencodeClient({
     baseUrl: config.opencode.apiUrl,
-    headers,
+    ...(headers ? { headers } : {}),
   });
 }
 

@@ -1,4 +1,4 @@
-import type { GlobalSession } from "@opencode-ai/sdk/v2";
+import type { GlobalSession } from "../../opencode/types.js";
 import { opencodeClient } from "../../opencode/client.js";
 import { getCurrentSession } from "../stores/settings-store.js";
 import { logger } from "../../utils/logger.js";

@@ -92,6 +92,10 @@ export const en = {
     "⚠️ Active session does not match the selected project, so it was reset. Use /sessions to pick one or /new to create a new session.",
   "bot.prompt_send_error": "Failed to send request to OpenCode.",
   "bot.session_error": "🔴 OpenCode returned an error: {message}",
+  "bot.model_unavailable_retrying":
+    "⚠️ OpenCode could not load the model provider (network or VPN hiccup). Retrying automatically… ({attempt}/{total})",
+  "bot.model_unavailable_failed":
+    "🔴 OpenCode could not load the model provider and the automatic retries failed. Check your network or VPN, then send the message again.\n{message}",
   "bot.assistant_reply_undelivered":
     "⚠️ The last assistant reply could not be delivered. Send your message again if you still need it.",
   "bot.stale_messages_skipped":

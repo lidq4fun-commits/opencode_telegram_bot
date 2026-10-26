@@ -205,7 +205,7 @@ describe("app/stores/settings-store", () => {
     expect(store.getResponseStreamingMode()).toBe("draft");
     expect(store.getSendDiffFileAttachments()).toBe(false);
     expect(store.getShowThinkingContent()).toBe(false);
-    expect(store.getPromptQueueMode()).toBe("queue");
+    expect(store.getPromptQueueMode()).toBe("steer");
     expect(store.getPinnedDashboardEnabled()).toBe(false);
 
     vi.unstubAllEnvs();
@@ -361,7 +361,7 @@ describe("app/stores/settings-store", () => {
     const store = await import("../../../src/app/stores/settings-store.js");
     await store.loadSettings();
 
-    expect(store.getPromptQueueMode()).toBe("queue");
+    expect(store.getPromptQueueMode()).toBe("steer");
 
     vi.unstubAllEnvs();
     vi.resetModules();

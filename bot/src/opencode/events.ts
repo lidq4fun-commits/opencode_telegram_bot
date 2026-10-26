@@ -1,5 +1,5 @@
 import { opencodeClient } from "./client.js";
-import { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "./types.js";
 import { logger } from "../utils/logger.js";
 import { isRecord } from "../utils/type-guards.js";
 import { isExpectedOpencodeUnavailableError } from "../utils/opencode-error.js";

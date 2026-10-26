@@ -31,9 +31,10 @@ import { downloadTelegramFile } from "../app/services/file-download-service.js";
 import {
   decryptEot10,
   encryptEot10,
+  encryptEot10Parts,
   encryptEot10RichMessage,
   isEot10Message,
-  decryptEot10MediaBuffer, isEot10MediaDocument, cacheDecryptedEot10Media,
+  decryptEot10MediaBufferAsync, isEot10MediaDocument, cacheDecryptedEot10Media,
   encryptEot10MediaInput } from "../../EOT10Crypto.mjs";
 
 const TRANSIENT_RETRY_SAFE_TELEGRAM_METHODS = new Set([
@@ -152,9 +153,26 @@ export function createBot(
         const secured = target ? { ...payload } as Record<string, unknown> : payload as Record<string, unknown>;
         let securedMethod = method;
         if (target) {
+          if (method === "sendMessage" && typeof secured.text === "string") {
+            const parts = encryptEot10Parts(secured.text);
+            if (parts.length > 1) {
+              delete secured.entities;
+              delete secured.parse_mode;
+              let firstResponse;
+              for (const [index, text] of parts.entries()) {
+                const chunk: Record<string, unknown> = { ...secured, text };
+                if (index < parts.length - 1) delete chunk.reply_markup;
+                const response = await prev(method, chunk as typeof payload, signal);
+                if (isTelegramApiErrorResponse(response)) throw new TelegramApiResponseError(response);
+                firstResponse ??= response;
+              }
+              return firstResponse!;
+            }
+          }
           if (typeof secured.text === "string") {
             secured.text = encryptEot10(secured.text);
             delete secured.entities;
+            delete secured.parse_mode;
           }
           if (typeof secured.caption === "string") {
             secured.caption = encryptEot10(secured.caption);
@@ -244,7 +262,7 @@ export function createBot(
       if (!isEot10MediaDocument(message.document)) { await ctx.reply("请发送 EOT10 加密附件。"); return; }
       try {
         const encrypted = await downloadTelegramFile(ctx.api, message.document.file_id);
-        const clear = decryptEot10MediaBuffer(encrypted.buffer);
+        const clear = await decryptEot10MediaBufferAsync(encrypted.buffer);
         cacheDecryptedEot10Media(message.document.file_id, { buffer: clear.buffer, filePath: encrypted.filePath });
         message.document.file_name = clear.metadata.filename;
         message.document.mime_type = clear.metadata.mimeType;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Context } from "grammy";
-import type { FilePartInput } from "@opencode-ai/sdk/v2";
+import type { FilePartInput } from "../../../src/opencode/types.js";
 import {
   admitPromptToInbox,
   consumePromptResponseMode,

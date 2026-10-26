@@ -3,7 +3,7 @@ param([string]$ArchiveDirectory = (Join-Path $PSScriptRoot 'dependencies\archive
 
 $ErrorActionPreference = 'Stop'
 $destination = Join-Path $PSScriptRoot 'dependencies\offline'
-foreach ($archive in @('portable-git-x64.exe', 'bun-x64.zip', 'opencode-v1.tgz', 'opencode-v2.tgz', 'webview2-x64.cab')) {
+foreach ($archive in @('portable-git-x64.exe', 'bun-x64.zip', 'opencode-v2.tgz', 'webview2-x64.cab', 'tg-x64.tar.gz')) {
     $file = Join-Path $ArchiveDirectory $archive
     if (-not (Test-Path -LiteralPath $file)) { throw "Offline archive is missing: $file" }
     $status = "$file.download-status.json"
@@ -12,9 +12,9 @@ foreach ($archive in @('portable-git-x64.exe', 'bun-x64.zip', 'opencode-v1.tgz',
     }
 }
 $inputs = @(
+    @{ File = 'tg-x64.tar.gz'; Algorithm = 'SHA256'; Hash = 'B5B3DAB350C073D4058805C3327E849F8EE8CCCB6ECD28E668838D10A0BE33DE' },
     @{ File = 'portable-git-x64.exe'; Algorithm = 'SHA256'; Hash = 'ECEB5E061AA90DF2F69DDD3E90F0030E1B8037A7829934BC40E4BE1CAA1ACCC1' },
     @{ File = 'bun-x64.zip'; Algorithm = 'SHA256'; Hash = '78C221C2376F79731CCF4E4AF0B3BB46D81FEFA3296C5ABEE09AD8A1B21E68C6' },
-    @{ File = 'opencode-v1.tgz'; Algorithm = 'SHA512'; Base64 = 'Ng4R5BDWS/xHmHyjBC2hQpakIrvu3vYvO7U2oF820xjih1VJl4zON52VGtT4Zh1o6kbf8f6s7yLPMzzblGSXuw==' },
     @{ File = 'opencode-v2.tgz'; Algorithm = 'SHA512'; Base64 = 'o7gQWmvckjnLjYTCjsHiztfLfhNZMHpPdRwM/Y/TsYaQsSqAiM3l65OaHBH6q4cEClnOYlpWqU2Jpb+iLwqvIQ==' }
 )
 foreach ($input in $inputs) {
@@ -26,7 +26,13 @@ foreach ($input in $inputs) {
 New-Item -ItemType Directory -Force $destination | Out-Null
 $stage = Join-Path $destination ('.restore-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $stage | Out-Null
-foreach ($version in @('v1', 'v2')) {
+$tgDirectory = Join-Path $destination 'tg'
+New-Item -ItemType Directory -Force $tgDirectory | Out-Null
+& tar.exe -xzf (Join-Path $ArchiveDirectory 'tg-x64.tar.gz') -C $tgDirectory
+if ($LASTEXITCODE) { throw 'Cannot extract Telegram CLI' }
+& (Join-Path $tgDirectory 'tg.exe') --help | Out-Null
+if ($LASTEXITCODE) { throw 'Telegram CLI smoke check failed' }
+foreach ($version in @('v2')) {
     $folder = Join-Path $stage $version
     New-Item -ItemType Directory -Force $folder | Out-Null
     & tar.exe -xzf (Join-Path $ArchiveDirectory "opencode-$version.tgz") -C $folder
@@ -57,7 +63,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $webDirectory 'msedgewebview2.exe'))
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') { throw 'WebView2 Microsoft signature verification failed' }
     Copy-Item -LiteralPath $browser.Directory.FullName -Destination $webDirectory -Recurse
 }
-foreach ($executable in @('bun\bun.exe', 'git\cmd\git.exe', 'opencode\v1\opencode.exe', 'opencode\v2\opencode.exe')) {
+foreach ($executable in @('bun\bun.exe', 'git\cmd\git.exe', 'opencode\v2\opencode.exe')) {
     & (Join-Path $destination $executable) --version
     if ($LASTEXITCODE) { throw "Offline dependency smoke check failed: $executable" }
 }

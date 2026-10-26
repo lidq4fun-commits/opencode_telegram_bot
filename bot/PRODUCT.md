@@ -29,7 +29,9 @@ No public inbound ports are required for normal usage.
 
 ### OpenCode server management
 
-- Works with OpenCode V1 and OpenCode V2 servers; the API version is set in configuration (`OPENCODE_SERVER_VERSION`, default V1) and a server of the other version is reported in the log
+- [x] OpenCode V2 only; defaults to V2 and rejects V1 configuration. The V1 SDK and bundled engine are no longer included.
+- [x] Desktop scans V2 installations, marks bundled engines in blue, offers gray Apply / green Applied and red Uninstall actions, and updates the stable CLI entry point when switching engines.
+- [x] Desktop checks the applied version against the official stable V2 release, downloads into a separate managed folder, verifies it, and applies it. Engine controls support Chinese and English.
 - Check OpenCode server status (running / not running)
 - Start OpenCode server from the app: `opencode serve` on V1, the registered background server (`opencode serve --service`) on V2; no start while the configured address answers with the wrong password or as the other version, while the local `opencode` executable is the other version, or on V2 while a registered V2 server runs on another port — the reason goes to the log
 - Stop OpenCode server from the app
@@ -159,6 +161,8 @@ Interaction routing rules:
 Model picker behavior:
 
 - Uses OpenCode local model state (`favorite` + `recent`)
+- The selected model is always the first favorite: a pick made in Telegram is not written to
+  OpenCode's state, so without it the model in use would be missing from the picker
 - Favorites are shown first, recent models are shown after favorites
 - Models already present in favorites are not duplicated in recent
 - Default configured model (`OPENCODE_MODEL_PROVIDER` + `OPENCODE_MODEL_ID`) is treated as favorite
@@ -172,6 +176,25 @@ Agent picker behavior:
 - Picking an agent applies that agent's configured model and/or variant when the agent names
   them; a field the agent does not name is left as it is. This is not a model pick and does
   not open the variant menu
+
+Startup and runtime behavior (desktop-managed):
+
+- The desktop starts the OpenCode service and the Bot at the same time: the Bot waits for the
+  engine instead of delaying its own Telegram startup, and `OPENCODE_MANAGED_BY_DESKTOP=1` keeps
+  it from spawning a competing engine
+- Startup requests that do not depend on each other run concurrently (`getMe` beside webhook
+  removal, the stored-model reconcile beside Bot assembly)
+- A complete provider catalog is saved next to `settings.json` and served for 30 seconds after
+  a restart while a real refresh runs in the background
+- Desktop sync state is written on change with a 2-second heartbeat, not twice per second
+- Event loop delay is measured (`[Perf]` debug line every minute, a warning above 150 ms p95);
+  the EOT10 session key is derived on the libuv pool and large EOT10 attachments are encrypted
+  and decrypted in one worker thread
+- A run that fails with `Model unavailable` (the engine could not refresh a provider config over
+  the network) re-sends the same prompt up to three times with backoff, and only then reports an
+  actionable error
+- Files a tool returns (screenshots, generated images) are forwarded to Telegram as photos
+  instead of being dropped with the text-only tool output
 
 ### Main features already implemented
 

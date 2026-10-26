@@ -10,7 +10,7 @@ import {
 } from "../../app/services/file-download-service.js";
 import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
-import type { FilePartInput } from "@opencode-ai/sdk/v2";
+import type { FilePartInput } from "../../opencode/types.js";
 import { flushPendingPrompt } from "./message-merger.js";
 import { createIncomingPrompt, type IncomingPrompt } from "../../app/types/prompt.js";
 import {

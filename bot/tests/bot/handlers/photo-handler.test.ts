@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context } from "grammy";
 
 const flushPendingPromptMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
+}));
 
 vi.mock("../../../src/bot/handlers/message-merger.js", () => ({
   flushPendingPrompt: flushPendingPromptMock,
@@ -74,7 +78,7 @@ describe("bot/handlers/photo-handler", () => {
     promptQueue.__resetForTests();
   });
 
-  it("queues a photo without downloading it while the agent is busy", async () => {
+  it("mirrors a busy photo prompt in the V2 inbox", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const { ctx } = createPhotoContext("release screenshot");
@@ -85,10 +89,8 @@ describe("bot/handlers/photo-handler", () => {
     expect(processPromptMock).not.toHaveBeenCalled();
     expect(promptQueue.list()).toEqual([
       expect.objectContaining({
-        text: "release screenshot",
         displayText: "release screenshot",
-        photos: [expect.objectContaining({ filename: "photo.jpg", fileId: "large-photo" })],
-        mediaBytes: 512,
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
       }),
     ]);
   });

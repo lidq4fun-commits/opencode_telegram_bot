@@ -56,9 +56,10 @@
     if (!state || Date.now() - state.updatedAt > 6000) { notice("unavailable"); reject(new Error("Synchronization unavailable")); return; }
     const id = `${Date.now()}-${String(++sequence).padStart(6, "0")}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => { pending.delete(id); notice("unavailable"); reject(new Error("Synchronization timed out")); }, 12000);
-    pending.set(id, { resolve, reject, timer });
-    window.chrome.webview.postMessage({ id, kind, instance: state.instance, mobileRevision: state.mobileRevision,
-      createdAt: Date.now(), directory: directory(), sessionID: sessionID(), ...details });
+    const payload = { id, kind, instance: state.instance, mobileRevision: state.mobileRevision,
+      createdAt: Date.now(), directory: directory(), sessionID: sessionID(), ...details };
+    pending.set(id, { resolve, reject, timer, kind, directory: payload.directory });
+    window.chrome.webview.postMessage(payload);
   });
   const fire = (kind, details) => { send(kind, details).catch(() => {}); };
   const follow = (reason) => {
@@ -125,7 +126,7 @@
   const routeChanged = () => {
     if (!state || Date.now() - state.updatedAt > 6000 || applying || location.pathname + location.search === lastRoute) return;
     lastRoute = location.pathname + location.search;
-    if (state.busy || state.mobileActive) { notice(state.busy ? "busy" : "mobile"); follow(state.busy ? "busy" : "mobile"); return; }
+    if ((state.busy || state.mobileActive) && state.currentSession?.id) { notice(state.busy ? "busy" : "mobile"); follow(state.busy ? "busy" : "mobile"); return; }
     if (sessionID() || location.pathname === "/new-session" || (version === "v1" && directory())) fire("selection");
   };
   for (const name of ["pushState", "replaceState"]) {
@@ -141,9 +142,20 @@
     if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && (!state || Date.now() - state.updatedAt > 6000)) {
       notice("unavailable"); throw new Error("Synchronization unavailable");
     }
-    if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && (state?.busy || state?.mobileActive)) {
-      notice(state.busy ? "busy" : "mobile"); follow(state.busy ? "busy" : "mobile");
-      throw new Error("Finish the current synchronized operation before creating a session");
+    // Creating a session in another project is allowed while the shared session answers; only
+    // the busy project itself stays locked.
+    if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && state?.mobileActive) {
+      notice("mobile"); follow("mobile");
+      throw new Error("Follow the phone's current operation before creating a session");
+    }
+    if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && state?.busy) {
+      const rawCreation = init?.body ?? (input instanceof Request ? await input.clone().text() : undefined);
+      const creation = typeof rawCreation === "string" ? parse(rawCreation) : undefined;
+      const creationDirectory = creation?.location?.directory || creation?.directory;
+      if (!creationDirectory || creationDirectory === state.currentProject?.worktree) {
+        notice("busy"); follow("busy");
+        throw new Error("Finish the current synchronized operation before creating a session");
+      }
     }
     const prompt = native && method === "POST" && /\/session\/ses_[\w-]+\/(prompt|prompt_async|command|shell)$/.test(url.pathname);
     const modelUpdate = native && method === "POST" && /\/session\/ses_[\w-]+\/model$/.test(url.pathname);
@@ -168,12 +180,27 @@
     accept(next, address, apiVersion, language) {
       const previous = state;
       state = next; target = address; version = apiVersion; locale = language;
+      let selectedDraft;
       for (const ack of next.acknowledgements || []) {
         const request = pending.get(ack.id);
         if (!request) continue;
         clearTimeout(request.timer); pending.delete(ack.id);
         if (ack.reason) { notice(ack.reason); follow(ack.reason); request.reject(new Error(`Synchronization: ${ack.reason}`)); }
-        else request.resolve();
+        else {
+          request.resolve();
+          if (request.kind === "selection" && request.directory) selectedDraft = request.directory;
+        }
+      }
+      // A project picked from this page without a session opens its draft, so the page never
+      // stays behind on the project list after the phone has already switched to it.
+      const sharedSession = next.currentSession?.id;
+      if (!sharedSession && location.pathname === "/" && version === "v2") {
+        const directory = selectedDraft
+          || (previous && next.currentProject?.worktree !== previous.currentProject?.worktree ? next.currentProject?.worktree : undefined);
+        if (directory) {
+          sessionStorage.setItem("opencode-telegram-sync-reason", "stale");
+          location.replace(new URL(target || location.href).origin + "/new-session?directory=" + encodeURIComponent(directory));
+        }
       }
       const reason = sessionStorage.getItem("opencode-telegram-sync-reason");
       if (reason) { sessionStorage.removeItem("opencode-telegram-sync-reason"); notice(reason); }
@@ -206,7 +233,14 @@
               }
             }
           }
-          if (target && location.pathname !== new URL(target).pathname) { follow(mobile ? "mobile" : next.busy ? "busy" : "stale"); return; }
+          const sharedSessionID = next.currentSession?.id;
+          if (version === "v2" && projectChanged && !sharedSessionID && next.currentProject?.worktree) {
+            // A project was chosen without a session: open its draft instead of the project list.
+            target = new URL(target || location.href).origin + "/new-session?directory=" + encodeURIComponent(next.currentProject.worktree);
+          }
+          // Without a shared session there is nothing to follow: never pull the page to the list.
+          const mayFollow = Boolean(sharedSessionID) || projectChanged;
+          if (mayFollow && target && location.pathname !== new URL(target).pathname) { follow(mobile ? "mobile" : next.busy ? "busy" : "stale"); return; }
           if (changed || (mobile && projectChanged)) reloadAuthenticated();
         } finally { applying = false; }
       }

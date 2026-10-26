@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 
 const flushPendingPromptMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
+}));
 
 vi.mock("../../../src/bot/handlers/message-merger.js", () => ({
   flushPendingPrompt: flushPendingPromptMock,
@@ -94,7 +98,7 @@ describe("bot/handlers/document", () => {
     promptQueue.__resetForTests();
   });
 
-  it("rejects oversized queued documents before downloading", async () => {
+  it("does not apply the removed local V1 media cap to V2 documents", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const { ctx } = createDocumentContext({
@@ -110,12 +114,12 @@ describe("bot/handlers/document", () => {
 
     await handleDocumentMessage(ctx, deps);
 
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(downloadMock).toHaveBeenCalledOnce();
     expect(processPromptMock).not.toHaveBeenCalled();
     expect(promptQueue.mediaSize()).toBe(0);
   });
 
-  it("rejects queued documents with an unknown media size", async () => {
+  it("prepares V2 inbox documents with an unknown source size", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const { ctx } = createDocumentContext({
@@ -130,12 +134,12 @@ describe("bot/handlers/document", () => {
 
     await handleDocumentMessage(ctx, deps);
 
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(downloadMock).toHaveBeenCalledOnce();
     expect(promptQueue.mediaSize()).toBe(0);
   });
 
   describe("text files", () => {
-    it("reserves raw source bytes when a text file is queued", async () => {
+    it("keeps only an inbox mirror when a text file is queued", async () => {
       vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
       container.foregroundSessionState.markBusy("session-1", "/repo");
       const { ctx } = createDocumentContext();
@@ -147,10 +151,10 @@ describe("bot/handlers/document", () => {
       expect(processPromptMock).not.toHaveBeenCalled();
       expect(promptQueue.list()).toEqual([
         expect.objectContaining({
-          mediaBytes: 1024,
+          inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
         }),
       ]);
-      expect(promptQueue.mediaSize()).toBe(1024);
+      expect(promptQueue.mediaSize()).toBe(0);
     });
 
     it("downloads and sends text file content as prompt", async () => {

@@ -22,6 +22,9 @@ let mobileRevision = 0;
 let mobileOperations = 0;
 let desktopOperation: Promise<void> | undefined;
 
+/** The desktop treats sync state older than 6 seconds as disconnected. */
+const STATE_HEARTBEAT_MS = 2000;
+
 /** Phone mutations run after an already admitted desktop attach has finished. */
 export async function waitForDesktopSyncIdle(): Promise<void> {
   await desktopOperation;
@@ -105,6 +108,8 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
   let stopped = false;
   let running: Promise<void> | undefined;
   const acknowledgements: Array<{ id: string; reason: string | null }> = [];
+  let lastStateSnapshot = "";
+  let lastStateWriteAt = 0;
 
   const context = () => ({
     currentProject: getCurrentProject(),
@@ -236,13 +241,21 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
       if (acknowledgements.length > 64) acknowledgements.shift();
       await fs.unlink(file);
     }
+    const snapshot = JSON.stringify({ ...context(), ...state(), acknowledgements });
+    const now = Date.now();
+    // A fresh timestamp lets the desktop detect a stopped/disconnected bot, so the file is
+    // rewritten at the heartbeat even when nothing changed; an idle tick writes nothing.
+    if (snapshot === lastStateSnapshot && now - lastStateWriteAt < STATE_HEARTBEAT_MS) {
+      return;
+    }
+    lastStateSnapshot = snapshot;
+    lastStateWriteAt = now;
     const output = JSON.stringify({
       ...context(),
       ...state(),
       acknowledgements,
-      updatedAt: Date.now(),
+      updatedAt: now,
     });
-    // A fresh timestamp lets the desktop detect a stopped/disconnected bot.
     await fs.writeFile(path.join(root, "state.tmp"), output);
     await fs.rename(path.join(root, "state.tmp"), path.join(root, "state.json"));
   }

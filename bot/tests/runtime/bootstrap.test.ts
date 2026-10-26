@@ -104,7 +104,7 @@ describe("runtime/bootstrap", () => {
     expect(updated).toContain("TELEGRAM_BOT_TOKEN=token:value");
     expect(updated).toContain("TELEGRAM_ALLOWED_USER_ID=42");
     expect(updated).toContain("# Telegram Proxy URL (optional)");
-    expect(updated).toContain("# OPENCODE_API_URL=http://localhost:4096");
+    expect(updated).toContain("# OPENCODE_API_URL=http://127.0.0.1:49374");
     expect(updated).toContain("OPENCODE_SERVER_USERNAME=opencode");
     expect(updated).toContain("# OPENCODE_SERVER_PASSWORD=");
     expect(updated).toContain("BOT_LOCALE=ru");
@@ -170,8 +170,8 @@ describe("runtime/bootstrap", () => {
   it("offers V2 on a first setup and the saved version on a re-run", () => {
     expect(getWizardServerVersionDefault(null)).toBe("v2");
     expect(getWizardServerVersionDefault("OPENCODE_SERVER_VERSION=v2\n")).toBe("v2");
-    expect(getWizardServerVersionDefault("OPENCODE_SERVER_VERSION=v1\n")).toBe("v1");
-    expect(getWizardServerVersionDefault("TELEGRAM_BOT_TOKEN=token:value\n")).toBe("v1");
+    expect(getWizardServerVersionDefault("OPENCODE_SERVER_VERSION=v1\n")).toBe("v2");
+    expect(getWizardServerVersionDefault("TELEGRAM_BOT_TOKEN=token:value\n")).toBe("v2");
   });
 
   it("keeps the saved server password when the answer is empty", () => {
@@ -201,7 +201,7 @@ describe("runtime/bootstrap", () => {
       ENV_EXAMPLE_CONTENT,
     );
 
-    expect(updated).toContain("# OPENCODE_API_URL=http://localhost:4096");
+    expect(updated).toContain("# OPENCODE_API_URL=http://127.0.0.1:49374");
     expect(updated).toContain("# OPENCODE_SERVER_PASSWORD=");
     expect(updated).not.toContain("OPENCODE_API_URL=https://example.com");
     expect(updated).not.toContain("OPENCODE_SERVER_PASSWORD=old-password");

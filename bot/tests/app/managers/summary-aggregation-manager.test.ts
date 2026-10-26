@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "../../../src/opencode/types.js";
 import { SummaryAggregator } from "../../../src/app/managers/summary-aggregation-manager.js";
 import { logger } from "../../../src/utils/logger.js";
 import { defined } from "../../helpers/defined.js";
@@ -100,6 +100,65 @@ describe("summary/aggregator", () => {
         hasFileAttachment: false,
       }),
     );
+  });
+
+  it("emits images a tool produced for Telegram", () => {
+    const onImage = vi.fn();
+    summaryAggregator.setOnToolImage(onImage);
+    summaryAggregator.setSession("session-1");
+
+    summaryAggregator.processEvent({
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "message-1",
+          sessionID: "session-1",
+          role: "assistant",
+          time: { created: Date.now() },
+        },
+      },
+    } as unknown as Event);
+
+    summaryAggregator.processEvent({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-image",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "tool",
+          callID: "call-image",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: { command: "screenshot" },
+            metadata: {},
+            output: "saved",
+            attachments: [
+              {
+                id: "part-image:file:0",
+                sessionID: "session-1",
+                messageID: "message-1",
+                type: "file",
+                mime: "image/png",
+                filename: "shot.png",
+                url: "data:image/png;base64,AAAA",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as Event);
+
+    expect(onImage).toHaveBeenCalledTimes(1);
+    expect(defined(onImage.mock.calls[0]?.[0])).toMatchObject({
+      sessionId: "session-1",
+      callId: "call-image",
+      tool: "bash",
+      mime: "image/png",
+      filename: "shot.png",
+      uri: "data:image/png;base64,AAAA",
+    });
   });
 
   it("emits root tool updates before completion filtering", () => {

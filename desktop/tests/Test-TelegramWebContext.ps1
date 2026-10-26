@@ -49,8 +49,8 @@ Assert-True ($result.Context.WebAddress($server, 'v2') -eq $server) 'Mismatched 
 $unicodeDirectory = 'E:\' + [char]0x9879 + [char]0x76EE + '\demo'
 Write-Context $primary $unicodeDirectory $unicodeDirectory
 $result = Read-Context
-$key = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($unicodeDirectory)).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-Assert-True ($result.Context.WebAddress($server, 'v1').AbsolutePath -eq "/$key/session/ses_test") 'V1 directory route preserves Unicode'
+$key = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('http://127.0.0.1:49374')).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+Assert-True ($result.Context.WebAddress($server, 'v1').AbsolutePath -eq "/server/$key/session/ses_test") 'Unicode projects use the shared V2 server route even for a V1 caller'
 
 $previousHome = [Environment]::GetEnvironmentVariable('OPENCODE_TELEGRAM_HOME')
 try {
@@ -115,5 +115,5 @@ Assert-True (-not $syncLoad.Invoke($null, $syncArguments)) 'A stopped bot cannot
 $syncValue.currentSession = $null
 [IO.File]::WriteAllText($primary, ($syncValue | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding $false))
 $result = Read-Context
-Assert-True ($result.Context.WebAddress($server, 'v1').AbsolutePath.EndsWith('/session')) 'A phone project without a session opens the V1 project workspace without creating a conversation'
+Assert-True ($result.Context.WebAddress($server, 'v1') -eq $server) 'A phone project without a session opens the server root instead of a stale conversation'
 Write-Output 'All Telegram web context checks passed; only isolated temporary fixtures were written.'

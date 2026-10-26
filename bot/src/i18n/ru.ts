@@ -91,6 +91,10 @@ export const ru: I18nDictionary = {
     "⚠️ Активная сессия не соответствует выбранному проекту, поэтому была сброшена. Используйте /sessions для выбора или /new для создания новой сессии.",
   "bot.prompt_send_error": "Не удалось отправить запрос в OpenCode.",
   "bot.session_error": "🔴 OpenCode вернул ошибку: {message}",
+  "bot.model_unavailable_retrying":
+    "鈿狅笍 OpenCode could not load the model provider (network or VPN hiccup). Retrying automatically鈥?({attempt}/{total})",
+  "bot.model_unavailable_failed":
+    "馃敶 OpenCode could not load the model provider and the automatic retries failed. Check your network or VPN, then send the message again.\n{message}",
   "bot.assistant_reply_undelivered":
     "⚠️ Последний ответ ассистента не удалось доставить. Отправьте сообщение ещё раз, если оно ещё нужно.",
   "bot.stale_messages_skipped":

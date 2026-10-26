@@ -168,3 +168,42 @@ test("Request-based prompt preserves its body for the native fetch", async () =>
   assert.equal(request.bodyUsed, true);
   assert.equal(f.calls.length, 1);
 });
+
+test("a project chosen without a session opens its draft and stays there", () => {
+  const f = fixture();
+  const other = { ...f.state, currentProject: { worktree: "/other" }, currentSession: null, mobileRevision: 2, busy: false };
+  f.accept(other, server + "/");
+  assert.equal(f.location.pathname, "/new-session");
+  assert.equal(f.location.search, "?directory=%2Fother");
+  // Later polls, including a busy answer elsewhere, must not pull the page back to the list.
+  f.accept(other, server + "/");
+  f.accept({ ...other, busy: true }, server + "/");
+  f.history.pushState({}, "", "/server/key/draft-active"); f.flush();
+  assert.equal(f.location.pathname, "/server/key/draft-active");
+});
+test("a session in another project can be created while the shared answer runs", async () => {
+  const f = fixture(); f.accept({ ...f.state, busy: true });
+  f.response({ id: "ses_other", location: { directory: "/other" } });
+  const promise = f.window.fetch(server + "/api/session", { method: "POST", body: JSON.stringify({ location: { directory: "/other" } }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.commands.at(-1).sessionID, "ses_other");
+  f.ack(); await promise;
+});
+test("a session in the busy project stays blocked", async () => {
+  const f = fixture(); f.accept({ ...f.state, busy: true });
+  await assert.rejects(
+    f.window.fetch(server + "/api/session", { method: "POST", body: JSON.stringify({ location: { directory: "/project" } }) }),
+    /current synchronized operation/,
+  );
+});
+
+test("a selected project opens its draft even before the bot adopts it", () => {
+  const f = fixture(); f.history.pushState({}, "", "/"); f.flush(); f.input();
+  f.localStorage.setItem("opencode.global.dat:layout", JSON.stringify({ home: { selection: { server, directory: "/other" } } }));
+  const selection = f.commands.at(-1);
+  assert.equal(selection.kind, "selection");
+  // The acknowledgement arrives with no shared session and the bot still on the old project.
+  f.accept({ ...f.state, currentSession: undefined, acknowledgements: [{ id: selection.id, reason: null }] }, server + "/");
+  assert.equal(f.location.pathname, "/new-session");
+  assert.equal(f.location.search, "?directory=%2Fother");
+});

@@ -1,12 +1,10 @@
 import type { Context } from "grammy";
 import {
   MAX_QUEUED_PROMPTS,
-  MAX_QUEUED_MEDIA_BYTES,
   promptQueue,
   type QueuedPromptInput,
 } from "../../app/managers/prompt-queue-manager.js";
 import type { IncomingPrompt } from "../../app/types/prompt.js";
-import { buildExternalUserInputNotification } from "../../app/services/external-user-input-service.js";
 import {
   cancelInboxPrompt,
   reconcileInboxPrompts,
@@ -15,13 +13,10 @@ import { isForegroundBusy } from "../../app/services/run-control-service.js";
 import { getCurrentSession } from "../../app/services/session-service.js";
 import { getPromptQueueMode } from "../../app/stores/settings-store.js";
 import { t } from "../../i18n/index.js";
-import { opencodeServerVersion } from "../../opencode/client.js";
 import { logger } from "../../utils/logger.js";
-import { sendBotText } from "../messages/telegram-text.js";
 import { isReplyKeyboardButtonText } from "../message-patterns.js";
 import {
   admitPromptToInbox,
-  processUserPrompt,
   startInboxPromptRun,
   type ProcessPromptDeps,
 } from "./prompt.js";
@@ -31,15 +26,6 @@ import {
 // chat counts as not busy and nothing is queued.
 let promptDeps: ProcessPromptDeps | null = null;
 
-// Live context of the last queued message, replayed when the queue drains.
-// Same approach as message-merger.ts.
-let queuedPromptContext: Context | null = null;
-
-// Both drain sites fire unawaited, and processUserPrompt only marks the session
-// busy after several network round-trips. Without this flag two overlapping
-// drains could each pass the busy check and start a second run for the same
-// session, losing the prompt the loser took off the queue.
-let dispatchInFlight = false;
 
 export function initializePromptQueueDispatch(deps: ProcessPromptDeps): void {
   promptDeps = deps;
@@ -51,11 +37,6 @@ function isBusy(): boolean {
 
 function isPromptQueueEnabled(): boolean {
   return getPromptQueueMode() !== "off";
-}
-
-/** On OpenCode V2 busy-time prompts wait in the session inbox, not in the bot. */
-function usesOpencodeInbox(): boolean {
-  return opencodeServerVersion === "v2";
 }
 
 /** Whether the text is user prompt content rather than a command or a button press. */
@@ -96,36 +77,7 @@ export async function tryEnqueuePrompt(ctx: Context, input: QueuedPromptInput): 
     return false;
   }
 
-  if (usesOpencodeInbox()) {
-    await sendPromptToInbox(ctx, input, promptDeps);
-    return true;
-  }
-
-  queuedPromptContext = ctx;
-
-  if (promptQueue.isFull()) {
-    logger.info(`[PromptQueue] Rejected prompt: queue is full (max=${MAX_QUEUED_PROMPTS})`);
-    await replyWithKeyboard(ctx, t("queue.full", { max: String(MAX_QUEUED_PROMPTS) }));
-    return true;
-  }
-
-  if (!promptQueue.canAcceptMedia(input.mediaBytes ?? 0)) {
-    await replyWithKeyboard(ctx, t("queue.media_limit", { maxSizeMb: formatQueuedMediaLimit() }));
-    return true;
-  }
-
-  const queued = promptQueue.add(input);
-  if (!queued) {
-    return false;
-  }
-
-  logger.info(
-    `[PromptQueue] Prompt queued while session is busy: size=${promptQueue.size()}/${MAX_QUEUED_PROMPTS}`,
-  );
-  await replyWithKeyboard(
-    ctx,
-    t("queue.added", { count: String(promptQueue.size()), max: String(MAX_QUEUED_PROMPTS) }),
-  );
+  await sendPromptToInbox(ctx, input, promptDeps);
   return true;
 }
 
@@ -209,7 +161,7 @@ export async function tryEnqueuePromptIfBusy(
  */
 export async function rejectQueuedMediaBeforePreparation(
   ctx: Context,
-  mediaBytes: number | undefined,
+  _mediaBytes: number | undefined,
 ): Promise<boolean> {
   if (!isBusy() || !isPromptQueueEnabled() || !ctx.chat) {
     return false;
@@ -218,24 +170,7 @@ export async function rejectQueuedMediaBeforePreparation(
     await replyWithKeyboard(ctx, t("queue.full", { max: String(MAX_QUEUED_PROMPTS) }));
     return true;
   }
-  // Nothing is held by the bot on V2, so the queued media cap does not apply there.
-  if (usesOpencodeInbox()) {
-    return false;
-  }
-  if (
-    typeof mediaBytes !== "number" ||
-    !Number.isSafeInteger(mediaBytes) ||
-    mediaBytes < 0 ||
-    !promptQueue.canAcceptMedia(mediaBytes)
-  ) {
-    await replyWithKeyboard(ctx, t("queue.media_limit", { maxSizeMb: formatQueuedMediaLimit() }));
-    return true;
-  }
   return false;
-}
-
-function formatQueuedMediaLimit(): string {
-  return String(MAX_QUEUED_MEDIA_BYTES / (1024 * 1024));
 }
 
 /**
@@ -243,71 +178,8 @@ function formatQueuedMediaLimit(): string {
  * same "external user input" format used for prompts sent from another device.
  */
 export async function dispatchNextQueuedPrompt(): Promise<void> {
-  // On V2 OpenCode delivers waiting prompts itself; the idle point only drops mirror
-  // items whose pickup or cancel the bot missed.
-  if (usesOpencodeInbox()) {
-    const session = getCurrentSession();
-    if (session) {
-      await reconcileInboxPrompts(session.id);
-    }
-    return;
-  }
-
-  if (
-    dispatchInFlight ||
-    promptQueue.size() === 0 ||
-    !promptDeps ||
-    !queuedPromptContext ||
-    isBusy()
-  ) {
-    return;
-  }
-
-  dispatchInFlight = true;
-
-  try {
-    const item = promptQueue.takeNext();
-    if (!item) {
-      return;
-    }
-
-    const ctx = queuedPromptContext;
-    const deps = promptDeps;
-
-    const notification = buildExternalUserInputNotification(item.displayText);
-    if (notification && ctx.chat) {
-      try {
-        const keyboard = deps.keyboardManager.getKeyboard();
-        await sendBotText({
-          api: ctx.api,
-          chatId: ctx.chat.id,
-          text: notification.text,
-          rawFallbackText: notification.rawFallbackText,
-          format: "markdown_v2",
-          options: keyboard ? { reply_markup: keyboard } : {},
-        });
-      } catch (err) {
-        logger.error("[PromptQueue] Failed to echo queued prompt:", err);
-      }
-    }
-
-    logger.info(
-      `[PromptQueue] Dispatching queued prompt: id=${item.id}, left=${promptQueue.size()}`,
-    );
-
-    try {
-      const dispatched = await processUserPrompt(ctx, item, deps, {
-        ...(item.responseMode ? { responseMode: item.responseMode } : {}),
-      });
-      if (!dispatched) {
-        logger.warn(`[PromptQueue] Queued prompt was not dispatched: id=${item.id}`);
-      }
-    } catch (err) {
-      logger.error(`[PromptQueue] Failed to dispatch queued prompt: id=${item.id}`, err);
-    }
-  } finally {
-    dispatchInFlight = false;
-  }
+  const session = getCurrentSession();
+  if (session) await reconcileInboxPrompts(session.id);
 }
 
 async function replyWithKeyboard(ctx: Context, text: string): Promise<void> {
@@ -320,6 +192,4 @@ async function replyWithKeyboard(ctx: Context, text: string): Promise<void> {
 /** Test helper: clears the stored context and dependencies. */
 export function __resetPromptQueueDispatchForTests(): void {
   promptDeps = null;
-  queuedPromptContext = null;
-  dispatchInFlight = false;
 }

@@ -1,6 +1,7 @@
-import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, pbkdf2, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
+import { Worker } from "node:worker_threads";
 
 const PREFIX = "EOT10:";
 const PASSWORD_ENV = "OPENCODE_TELEGRAM_EOT10_PASSWORD";
@@ -20,13 +21,38 @@ function deriveKey(salt) {
   const password = process.env[PASSWORD_ENV];
   if (!password || password.length < 12) throw new Error(`${PASSWORD_ENV} must contain a password of at least 12 characters`);
   const key = pbkdf2Sync(password.normalize("NFKC"), salt, PBKDF2_ITERATIONS, 32, "sha256");
+  rememberKey(keyId, key);
+  return key;
+}
+
+function rememberKey(keyId, key) {
   derivedKeys.set(keyId, key);
   while (derivedKeys.size > 128) {
     const oldestKeyId = derivedKeys.keys().next().value;
     derivedKeys.get(oldestKeyId)?.fill(0);
     derivedKeys.delete(oldestKeyId);
   }
-  return key;
+}
+
+/**
+ * Derives the session key on the libuv thread pool (a second core) instead of blocking the
+ * event loop for ~100 ms. Call once at startup; `deriveKey` then finds the cached key.
+ */
+export function prepareEot10Key() {
+  const salt = SESSION_SALT;
+  const keyId = salt.toString("base64url");
+  if (derivedKeys.has(keyId)) return Promise.resolve();
+  const password = process.env[PASSWORD_ENV];
+  if (!password || password.length < 12) {
+    return Promise.reject(new Error(`${PASSWORD_ENV} must contain a password of at least 12 characters`));
+  }
+  return new Promise((resolve, reject) => {
+    pbkdf2(password.normalize("NFKC"), salt, PBKDF2_ITERATIONS, 32, "sha256", (error, key) => {
+      if (error) { reject(error); return; }
+      if (!derivedKeys.has(keyId)) rememberKey(keyId, key);
+      resolve();
+    });
+  });
 }
 
 function encryptEot10WithKey(plaintext, salt, key) {
@@ -56,7 +82,19 @@ const richTextKeys = new Set(["text", "caption", "credit", "summary", "title", "
 
 function encryptRichText(value, salt, derivedKey) {
   if (typeof value === "string") return value.length > 0 ? encryptEot10WithKey(value, salt, derivedKey) : value;
-  if (Array.isArray(value)) return value.map(item => encryptRichText(item, salt, derivedKey));
+  if (Array.isArray(value)) {
+    // Telegram coalesces adjacent string leaves into one TL text field. Merge
+    // plaintext first so that field contains one complete authenticated envelope.
+    const merged = [];
+    for (const item of value) {
+      if (typeof item === "string" && typeof merged[merged.length - 1] === "string") {
+        merged[merged.length - 1] += item;
+      } else {
+        merged.push(item);
+      }
+    }
+    return merged.map(item => encryptRichText(item, salt, derivedKey));
+  }
   if (!value || typeof value !== "object") return value;
   if (value.type === "button" || value.type === "buttons") return value;
   return Object.fromEntries(Object.entries(value).map(([fieldName, item]) => [
@@ -110,7 +148,7 @@ export async function encryptEot10MediaInput(input) {
     ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown", ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   })[extension] || "application/octet-stream";
-  const buffer = encryptEot10MediaBuffer(fileBytes, { filename, mimeType, kind: mimeType.startsWith("image/") ? "photo" : "document" });
+  const buffer = await encryptEot10MediaBufferAsync(fileBytes, { filename, mimeType, kind: mimeType.startsWith("image/") ? "photo" : "document" });
   fileBytes.fill(0);
   return { buffer, filename: `EOT10-${randomBytes(8).toString("hex")}.eotm` };
 }
@@ -151,6 +189,84 @@ export function encryptEot10MediaBuffer(fileBytes, metadata = {}) {
 
 export function isEot10MediaBuffer(value) {
   return Buffer.isBuffer(value) && value.length >= MEDIA_HEADER_LENGTH + 20 && value.subarray(0, MEDIA_MAGIC.length).equals(MEDIA_MAGIC);
+}
+
+// AES-GCM runs on the main thread for small files. A large attachment is handed to one
+// worker thread so Telegram polling and SSE handling stay responsive while it is encrypted.
+const MEDIA_WORKER_THRESHOLD_BYTES = 2 * 1024 * 1024;
+let mediaWorker = null;
+let mediaJobSequence = 0;
+const mediaJobs = new Map();
+
+function failMediaJobs(error) {
+  for (const job of mediaJobs.values()) job.reject(error);
+  mediaJobs.clear();
+}
+
+function getMediaWorker() {
+  if (mediaWorker) return mediaWorker;
+  mediaWorker = new Worker(new URL("./EOT10CryptoWorker.mjs", import.meta.url));
+  mediaWorker.unref();
+  mediaWorker.on("message", (message) => {
+    const job = mediaJobs.get(message.id);
+    if (!job) return;
+    mediaJobs.delete(message.id);
+    if (message.error) job.reject(new Error(message.error));
+    else job.resolve(message.result);
+    if (mediaJobs.size === 0) mediaWorker?.unref();
+  });
+  mediaWorker.on("error", (error) => failMediaJobs(error));
+  mediaWorker.on("exit", (code) => {
+    mediaWorker = null;
+    if (code !== 0) failMediaJobs(new Error(`EOT10 media worker exited with code ${code}`));
+  });
+  return mediaWorker;
+}
+
+function runMediaJob(kind, bytes, metadata) {
+  return new Promise((resolve, reject) => {
+    let worker;
+    try {
+      worker = getMediaWorker();
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const id = ++mediaJobSequence;
+    mediaJobs.set(id, { resolve, reject });
+    worker.ref();
+    const copy = new Uint8Array(bytes);
+    worker.postMessage({ id, kind, bytes: copy, metadata }, [copy.buffer]);
+  });
+}
+
+function toBuffer(value) {
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof Uint8Array) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  return Buffer.from(value);
+}
+
+export async function encryptEot10MediaBufferAsync(fileBytes, metadata = {}) {
+  const input = toBuffer(fileBytes);
+  if (input.length < MEDIA_WORKER_THRESHOLD_BYTES) return encryptEot10MediaBuffer(input, metadata);
+  const result = await runMediaJob("encrypt", input, metadata);
+  return toBuffer(result);
+}
+
+export async function decryptEot10MediaBufferAsync(value) {
+  const packed = toBuffer(value);
+  if (packed.length < MEDIA_WORKER_THRESHOLD_BYTES) return decryptEot10MediaBuffer(packed);
+  const result = await runMediaJob("decrypt", packed, null);
+  return { buffer: toBuffer(result.buffer), metadata: result.metadata };
+}
+
+/** Stops the media worker; the Bot calls this on shutdown so no thread outlives it. */
+export async function stopEot10Workers() {
+  if (!mediaWorker) return;
+  const worker = mediaWorker;
+  mediaWorker = null;
+  failMediaJobs(new Error("EOT10 media worker stopped"));
+  await worker.terminate();
 }
 
 export function isEot10MediaDocument(document) {
@@ -212,9 +328,23 @@ export function isEot10Message(value) {
 
 // Keep encrypted envelopes below Telegram's 4096-character message ceiling.
 export function encryptEot10Parts(plaintext, maxPlaintextChars = 2850) {
+  if (!Number.isInteger(maxPlaintextChars) || maxPlaintextChars < 1) throw new Error("Invalid EOT10 chunk size");
   const parts = [];
-  for (let offset = 0; offset < plaintext.length; offset += maxPlaintextChars) {
-    parts.push(encryptEot10(plaintext.slice(offset, offset + maxPlaintextChars)));
+  const overhead = encryptEot10("").length;
+  // Both the ciphertext and JSON envelope are base64 encoded.
+  const maxBytes = Math.floor((4096 - overhead - 4) * 9 / 16);
+  let chunk = "";
+  let bytes = 0;
+  for (const character of plaintext) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (chunk && (bytes + size > maxBytes || chunk.length + character.length > maxPlaintextChars)) {
+      parts.push(encryptEot10(chunk));
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += character;
+    bytes += size;
   }
+  if (chunk) parts.push(encryptEot10(chunk));
   return parts;
 }

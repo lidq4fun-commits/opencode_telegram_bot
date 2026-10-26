@@ -1,6 +1,5 @@
 import { Bot, Context } from "grammy";
-import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2";
-import type { Model } from "@opencode-ai/sdk/v2";
+import type { FilePartInput, TextPartInput, Model } from "../../opencode/types.js";
 import { opencodeClient, opencodeV2Client } from "../../opencode/client.js";
 import type { V2InboxDelivery } from "../../opencode/v2/client.js";
 import {
@@ -12,6 +11,7 @@ import { ingestSessionInfoForCache } from "../../app/services/session-cache-serv
 import { getCurrentProject, getTtsMode } from "../../app/stores/settings-store.js";
 import { getStoredAgent, resolveProjectAgent } from "../../app/services/agent-selection-service.js";
 import { getStoredModel } from "../../app/services/model-selection-service.js";
+import { rememberPromptForModelRetry } from "../../app/services/prompt-model-retry.js";
 import { formatVariantForButton } from "../../app/services/variant-selection-service.js";
 import { createMainKeyboard } from "../keyboards/main-reply-keyboard.js";
 import { stopEventListening } from "../../opencode/events.js";
@@ -299,6 +299,9 @@ export async function processUserPrompt(
     const { promptOptions, storedModel, currentAgent, preparedText, promptErrorLogContext } =
       prepared;
 
+    // Remembered so a transient "Model unavailable" failure can re-send this exact prompt.
+    rememberPromptForModelRetry(promptOptions);
+
     logger.info(
       `[Bot] Calling session.promptAsync (start-only) with agent=${currentAgent}, fileCount=${promptErrorLogContext.fileCount}...`,
     );
@@ -565,6 +568,7 @@ export async function admitPromptToInbox(
     logger.info(
       `[Bot] Sending prompt to the session inbox: session=${currentSession.id}, delivery=${delivery}, fileCount=${prepared.promptErrorLogContext.fileCount}`,
     );
+    rememberPromptForModelRetry(prepared.promptOptions);
     const { data, error } = await opencodeV2Client.session.promptAsync({
       ...prepared.promptOptions,
       delivery,

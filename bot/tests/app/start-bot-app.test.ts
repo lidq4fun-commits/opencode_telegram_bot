@@ -15,6 +15,7 @@ const mocked = vi.hoisted(() => ({
   scheduledTaskInitializeMock: vi.fn(),
   scheduledTaskShutdownMock: vi.fn(),
   reconcileStoredModelSelectionMock: vi.fn(),
+  seedModelCatalogFromDiskMock: vi.fn(),
   startModelCatalogWarmupMock: vi.fn(),
   clearServiceStateFileMock: vi.fn(),
   isServiceChildProcessMock: vi.fn(),
@@ -74,6 +75,7 @@ vi.mock("../../src/app/stores/settings-store.js", () => ({
 
 vi.mock("../../src/app/services/model-selection-service.js", () => ({
   reconcileStoredModelSelection: mocked.reconcileStoredModelSelectionMock,
+  seedModelCatalogFromDisk: mocked.seedModelCatalogFromDiskMock,
   startModelCatalogWarmup: mocked.startModelCatalogWarmupMock,
 }));
 
@@ -191,6 +193,7 @@ describe("app/start-bot-app", () => {
     mocked.scheduledTaskInitializeMock.mockReset();
     mocked.scheduledTaskShutdownMock.mockReset();
     mocked.reconcileStoredModelSelectionMock.mockReset();
+    mocked.seedModelCatalogFromDiskMock.mockReset();
     mocked.startModelCatalogWarmupMock.mockReset();
     mocked.clearServiceStateFileMock.mockReset();
     mocked.isServiceChildProcessMock.mockReset();

@@ -97,6 +97,10 @@ export const it: I18nDictionary = {
     "⚠️ La sessione attiva non corrisponde al progetto selezionato, quindi è stata reimpostata. Usa /sessions per sceglierne una o /new per crearne una nuova.",
   "bot.prompt_send_error": "Invio della richiesta a OpenCode non riuscito.",
   "bot.session_error": "🔴 OpenCode ha restituito un errore: {message}",
+  "bot.model_unavailable_retrying":
+    "鈿狅笍 OpenCode could not load the model provider (network or VPN hiccup). Retrying automatically鈥?({attempt}/{total})",
+  "bot.model_unavailable_failed":
+    "馃敶 OpenCode could not load the model provider and the automatic retries failed. Check your network or VPN, then send the message again.\n{message}",
   "bot.assistant_reply_undelivered":
     "⚠️ The last assistant reply could not be delivered. Send your message again if you still need it.",
   "bot.stale_messages_skipped":

@@ -3,6 +3,7 @@ import type {
   AssistantMessage,
   Command,
   FileDiff,
+  FilePart,
   FilePartInput,
   GlobalSession,
   McpStatus,
@@ -18,7 +19,7 @@ import type {
   TextPartInput,
   ToolState,
   UserMessage,
-} from "@opencode-ai/sdk/v2";
+} from "../types.js";
 import type {
   AgentInfo,
   FileDiffInfo,
@@ -166,6 +167,7 @@ function toV1UserMessage(message: SessionMessageUser, sessionID: string): V1Mess
 function toV1ToolState(
   tool: Extract<SessionMessageAssistant["content"][number], { type: "tool" }>,
   toolName: string,
+  base: { sessionID: string; messageID: string },
 ): ToolState {
   const start = tool.time.ran ?? tool.time.created;
   const end = tool.time.completed ?? start;
@@ -178,6 +180,23 @@ function toV1ToolState(
     return { status: "running", input, metadata: state.metadata, time: { start } };
   }
   if (state.status === "completed") {
+    // Tool results can carry files (screenshots, generated images); keep them so the Bot can
+    // send them to Telegram instead of dropping them with the text-only output.
+    const attachments = state.content.flatMap((item, index): FilePart[] =>
+      item.type === "file"
+        ? [
+            {
+              id: `${tool.id}:file:${index}`,
+              sessionID: base.sessionID,
+              messageID: base.messageID,
+              type: "file",
+              mime: item.mime,
+              ...(item.name ? { filename: item.name } : {}),
+              url: item.uri,
+            },
+          ]
+        : [],
+    );
     return {
       status: "completed",
       input,
@@ -185,6 +204,7 @@ function toV1ToolState(
       title: "",
       metadata: state.metadata ?? {},
       time: { start, end },
+      ...(attachments.length > 0 ? { attachments } : {}),
     };
   }
   return {
@@ -245,7 +265,7 @@ function toV1AssistantMessage(
       type: "tool",
       callID: item.id,
       tool: toolName,
-      state: toV1ToolState(item, toolName),
+      state: toV1ToolState(item, toolName, { sessionID, messageID: message.id }),
     };
   });
 
@@ -267,8 +287,9 @@ export function toV1Message(
   return null;
 }
 
-export function toV1FileDiff(diff: FileDiffInfo): FileDiff {
+export function toV1FileDiff(diff: FileDiffInfo): FileDiff & { file: string } {
   return {
+    file: diff.file,
     path: diff.file,
     status: diff.status,
     additions: diff.additions,

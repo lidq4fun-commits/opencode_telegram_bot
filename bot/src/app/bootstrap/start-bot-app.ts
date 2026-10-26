@@ -8,9 +8,12 @@ import {
 } from "../../opencode/ready-refresh.js";
 import { flushSettings, loadSettings } from "../stores/settings-store.js";
 import { LocalCommandRegistry } from "../services/local-command-registry.js";
+import { startEventLoopMonitor } from "../services/event-loop-monitor.js";
+import { prepareEot10Key, stopEot10Workers } from "../../../EOT10Crypto.mjs";
 import { BUILT_IN_COMMAND_NAMES } from "../../bot/commands/definitions.js";
 import {
   reconcileStoredModelSelection,
+  seedModelCatalogFromDisk,
   startModelCatalogWarmup,
 } from "../services/model-selection-service.js";
 import { getBotVersion } from "../../runtime/bot-version.js";
@@ -131,6 +134,7 @@ async function callTelegramAtStartup<T>(
 
 export async function startBotApp(): Promise<void> {
   await initializeLogger();
+  const stopLagMonitor = startEventLoopMonitor();
 
   const mode = getRuntimeMode();
   const runtimePaths = getRuntimePaths();
@@ -209,9 +213,18 @@ export async function startBotApp(): Promise<void> {
   await loadSettings();
   // The server may have been started together with the bot and still be registering providers.
   startModelCatalogWarmup();
-  await reconcileStoredModelSelection();
+  await seedModelCatalogFromDisk();
+  if (process.env.OPENCODE_TELEGRAM_EOT10_ENABLED === "1") {
+    // Derive the EOT10 key on the libuv pool so the first message does not block the loop.
+    safeBackgroundTask({
+      taskName: "app.prepareEot10Key",
+      task: () => prepareEot10Key(),
+    });
+  }
   const container = createAppContainer();
   registerOpenCodeReadyRefreshHandler(container);
+  // Independent of each other: the catalog reconcile runs while the Bot is being assembled.
+  const reconcileModelSelection = reconcileStoredModelSelection();
   const { opencodeAutoRestartService, scheduledTaskRuntime } = container;
   const localCommandRegistry = await LocalCommandRegistry.load({
     directoryPath: runtimePaths.localCommandsDirPath,
@@ -219,10 +232,13 @@ export async function startBotApp(): Promise<void> {
   });
   const bot = createBot(container, localCommandRegistry);
   const stopDesktopSync = startDesktopSync(container, bot);
-  await scheduledTaskRuntime.initialize(
-    bot,
-    createScheduledTaskDeliverySender(bot.api, config.telegram.allowedUserId),
-  );
+  await Promise.all([
+    reconcileModelSelection,
+    scheduledTaskRuntime.initialize(
+      bot,
+      createScheduledTaskDeliverySender(bot.api, config.telegram.allowedUserId),
+    ),
+  ]);
   safeBackgroundTask({
     taskName: "app.opencodeStartup",
     task: async () => {
@@ -286,6 +302,8 @@ export async function startBotApp(): Promise<void> {
       `[Bot] Dropping ~${webhookInfo.pending_update_count} update(s) queued while the bot was offline`,
     );
   }
+  // getMe does not depend on webhook removal; both requests run at the same time.
+  const identityPromise = callTelegramAtStartup("getMe", () => bot.api.getMe(), isShutdown);
   if (webhookInfo.url) {
     logger.info(`[Bot] Webhook detected: ${webhookInfo.url}, removing...`);
     const deleted = await callTelegramAtStartup("deleteWebhook", () => bot.api.deleteWebhook(), isShutdown);
@@ -295,7 +313,7 @@ export async function startBotApp(): Promise<void> {
     logger.info("[Bot] Webhook removed, switching to long polling");
   }
 
-  const identity = await callTelegramAtStartup("getMe", () => bot.api.getMe(), isShutdown);
+  const identity = await identityPromise;
   if (identity === "shutdown" || shutdownStarted) {
     return;
   }
@@ -318,6 +336,10 @@ export async function startBotApp(): Promise<void> {
     throw error;
   } finally {
     await stopDesktopSync();
+    stopLagMonitor();
+    await stopEot10Workers().catch(() => {
+      // A worker that already exited needs no cleanup.
+    });
     process.off("unhandledRejection", unhandledRejectionHandler);
     process.off("uncaughtException", uncaughtExceptionHandler);
     process.off("SIGINT", handleSigint);

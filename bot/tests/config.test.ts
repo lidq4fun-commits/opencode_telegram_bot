@@ -447,11 +447,11 @@ describe("config OpenCode server version", () => {
     vi.stubEnv("OPENCODE_SERVER_VERSION", "");
   });
 
-  it("uses V1 and the V1 default URL when the version is not set", async () => {
+  it("uses V2 and the V2 default URL when the version is not set", async () => {
     const config = await loadConfig();
 
-    expect(config.opencode.serverVersion).toBe("v1");
-    expect(config.opencode.apiUrl).toBe("http://localhost:4096");
+    expect(config.opencode.serverVersion).toBe("v2");
+    expect(config.opencode.apiUrl).toBe("http://127.0.0.1:49374");
   });
 
   it("uses the V2 default URL when V2 is selected", async () => {
@@ -472,11 +472,17 @@ describe("config OpenCode server version", () => {
     expect(config.opencode.apiUrl).toBe("http://127.0.0.1:4096");
   });
 
-  it("falls back to V1 on an unrecognised version", async () => {
+  it("rejects an unrecognised version", async () => {
     vi.stubEnv("OPENCODE_SERVER_VERSION", "2");
 
-    const config = await loadConfig();
-
-    expect(config.opencode.serverVersion).toBe("v1");
+    await expect(loadConfig()).rejects.toThrow("Only OpenCode V2 is supported");
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+  it("rejects V1 instead of silently selecting a different client", async () => {
+    vi.stubEnv("OPENCODE_SERVER_VERSION", "v1");
+    await expect(loadConfig()).rejects.toThrow("Only OpenCode V2 is supported");
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
 });

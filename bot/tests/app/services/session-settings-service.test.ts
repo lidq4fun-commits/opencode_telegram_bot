@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Session } from "@opencode-ai/sdk/v2";
+import type { Session } from "../../../src/opencode/types.js";
 
 const selectAgent = vi.hoisted(() => vi.fn());
 const selectModel = vi.hoisted(() => vi.fn());

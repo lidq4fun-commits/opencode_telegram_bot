@@ -13,6 +13,9 @@ import {
 
 const SERVER_READY_TIMEOUT_MS = 10000;
 const SERVER_READY_POLL_INTERVAL_MS = 500;
+// The desktop starts the engine and the Bot at the same time; a managed Bot waits for it
+// briefly instead of leaving the catalog and the dashboard unavailable for a whole interval.
+const STARTUP_READY_WAIT_MS = 60000;
 const HEALTH_CHECK_TIMEOUT_MS = 3000;
 const HEALTH_CHECK_TIMED_OUT = Symbol("health-check-timed-out");
 
@@ -108,12 +111,43 @@ export class OpencodeAutoRestartService {
 
     await this.checkAndRestart("startup");
 
+    if (!this.serverWasHealthy && this.started && config.opencode.managedByDesktop && !isContainerRuntime()) {
+      await this.waitForManagedStartup();
+    }
+
     this.timer = setInterval(() => {
       void this.checkAndRestart("interval");
     }, config.opencode.monitorIntervalSec * 1000);
     this.timer.unref?.();
 
     return true;
+  }
+
+  /** Waits (briefly) for the engine the desktop is starting, then reports ready as usual. */
+  private async waitForManagedStartup(): Promise<void> {
+    const startedAt = Date.now();
+
+    while (this.started && Date.now() - startedAt < STARTUP_READY_WAIT_MS) {
+      await sleep(SERVER_READY_POLL_INTERVAL_MS);
+      if (!this.started || this.serverWasHealthy) {
+        return;
+      }
+
+      if (await isOpencodeServerHealthy()) {
+        this.serverWasHealthy = true;
+        logger.info(
+          `[OpenCodeAutoRestart] OpenCode server became ready after ${Date.now() - startedAt}ms: reason=startup_wait`,
+        );
+        await this.opencodeReadyLifecycle.notifyReady("auto_restart_startup_wait");
+        return;
+      }
+    }
+
+    if (this.started) {
+      logger.warn(
+        `[OpenCodeAutoRestart] OpenCode server was not ready within ${STARTUP_READY_WAIT_MS}ms; the interval check keeps trying`,
+      );
+    }
   }
 
   stop(): void {

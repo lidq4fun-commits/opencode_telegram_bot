@@ -1,4 +1,5 @@
 import { logger } from "../utils/logger.js";
+import { config } from "../config.js";
 import { findRegisteredOpencodeServerUrl, opencodeServerVersion } from "./client.js";
 import {
   getOpencodeApiVersion,
@@ -73,6 +74,15 @@ export async function canStartLocalOpencodeServer(
   target: LocalOpencodeTarget,
   mode: ProblemReportMode,
 ): Promise<boolean> {
+  if (config.opencode.managedByDesktop) {
+    reportOpencodeProblem("desktop-managed", mode, () =>
+      logger.warn(
+        `[OpenCode] The desktop launcher owns the local OpenCode server for ${describeServerUrl()}; the Bot will not start another one.`,
+      ),
+    );
+    return false;
+  }
+
   const cause = await classifyFailedHealthCheck();
   if (cause.kind !== "unknown") {
     reportFailedHealthCause(cause, mode);

@@ -235,6 +235,56 @@ describe("opencode/v2/mappers", () => {
     });
   });
 
+  it("keeps image files a tool returns so the Bot can send them", () => {
+    const message = {
+      id: "msg-img",
+      type: "assistant",
+      agent: "build",
+      model: { id: "m", providerID: "p" },
+      time: { created: 1, completed: 5 },
+      content: [
+        {
+          type: "tool",
+          id: "call-shot",
+          name: "shell",
+          state: {
+            status: "completed",
+            input: { command: "screenshot" },
+            content: [
+              { type: "text", text: "saved" },
+              {
+                type: "file",
+                uri: "data:image/png;base64,AAAA",
+                mime: "image/png",
+                name: "shot.png",
+              },
+            ],
+          },
+          time: { created: 2, ran: 3, completed: 4 },
+        },
+      ],
+    } as unknown as SessionMessageInfo;
+
+    const mapped = toV1Message(message, "ses-1", "D:/repo");
+    const tool = mapped?.parts[0];
+
+    expect(tool).toMatchObject({
+      type: "tool",
+      state: {
+        status: "completed",
+        output: "saved",
+        attachments: [
+          {
+            type: "file",
+            mime: "image/png",
+            filename: "shot.png",
+            url: "data:image/png;base64,AAAA",
+          },
+        ],
+      },
+    });
+  });
+
   it("drops V2 message kinds that have no V1 form", () => {
     const idle = {
       id: "msg-2",

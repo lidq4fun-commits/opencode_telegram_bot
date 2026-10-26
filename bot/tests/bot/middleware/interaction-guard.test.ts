@@ -8,6 +8,10 @@ import {
   promptQueue,
 } from "../../../src/app/managers/prompt-queue-manager.js";
 import { createIncomingPrompt } from "../../../src/app/types/prompt.js";
+vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
+}));
 import { setIncomingPrompt } from "../../../src/bot/handlers/rich-message-handler.js";
 import * as settingsStore from "../../../src/app/stores/settings-store.js";
 import { startInteractionForTest } from "../../helpers/interaction.js";
@@ -469,9 +473,7 @@ describe("interactionGuardMiddleware", () => {
     expect(next).not.toHaveBeenCalled();
     expect(promptQueue.list()).toEqual([
       expect.objectContaining({
-        text: "",
-        photos: [{ fileId: "photo-1", filename: "rich.jpg", source: "rich", fileSize: 512 }],
-        mediaBytes: 512,
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
       }),
     ]);
     expect(ctx.reply).toHaveBeenCalledWith(
@@ -480,7 +482,7 @@ describe("interactionGuardMiddleware", () => {
     );
   });
 
-  it("rejects a rich photo prompt with an unknown media size while busy", async () => {
+  it("admits a V2 rich photo prompt with unknown source size", async () => {
     mocked.getPromptQueueMode.mockReturnValue("queue");
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
     const ctx = createTextContext("");
@@ -495,14 +497,14 @@ describe("interactionGuardMiddleware", () => {
     await interactionGuardMiddleware(ctx, next, deps);
 
     expect(next).not.toHaveBeenCalled();
-    expect(promptQueue.size()).toBe(0);
+    expect(promptQueue.size()).toBe(1);
     expect(ctx.reply).toHaveBeenCalledWith(
-      t("queue.media_limit", { maxSizeMb: "20" }),
+      t("queue.added", { count: "1", max: String(MAX_QUEUED_PROMPTS) }),
       expect.anything(),
     );
   });
 
-  it("rejects a rich photo aggregate above the media limit while busy", async () => {
+  it("does not apply the removed local V1 media cap to rich V2 photos", async () => {
     mocked.getPromptQueueMode.mockReturnValue("queue");
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
     const ctx = createTextContext("");
@@ -527,7 +529,7 @@ describe("interactionGuardMiddleware", () => {
     expect(next).not.toHaveBeenCalled();
     expect(promptQueue.mediaSize()).toBe(0);
     expect(ctx.reply).toHaveBeenCalledWith(
-      t("queue.media_limit", { maxSizeMb: "20" }),
+      t("queue.added", { count: "1", max: String(MAX_QUEUED_PROMPTS) }),
       expect.anything(),
     );
   });

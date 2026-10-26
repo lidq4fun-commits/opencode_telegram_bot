@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Model } from "@opencode-ai/sdk/v2";
+import type { Model } from "../../../src/opencode/types.js";
 
 const { providersMock } = vi.hoisted(() => ({
   providersMock: vi.fn(),

@@ -99,6 +99,10 @@ export const id: I18nDictionary = {
     "⚠️ Sesi aktif tidak cocok dengan proyek yang dipilih, jadi sesi direset. Gunakan /sessions untuk memilih atau /new untuk membuat sesi baru.",
   "bot.prompt_send_error": "Gagal mengirim prompt ke OpenCode.",
   "bot.session_error": "🔴 OpenCode mengembalikan kesalahan: {message}",
+  "bot.model_unavailable_retrying":
+    "鈿狅笍 OpenCode could not load the model provider (network or VPN hiccup). Retrying automatically鈥?({attempt}/{total})",
+  "bot.model_unavailable_failed":
+    "馃敶 OpenCode could not load the model provider and the automatic retries failed. Check your network or VPN, then send the message again.\n{message}",
   "bot.assistant_reply_undelivered":
     "⚠️ Balasan terakhir dari asisten tidak berhasil dikirim. Kirim ulang pesanmu jika masih membutuhkannya.",
   "bot.stale_messages_skipped":

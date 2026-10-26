@@ -19,7 +19,6 @@ const DEFAULT_API_URLS: Record<OpencodeServerVersion, string> = {
   v1: "http://localhost:4096",
   v2: "http://127.0.0.1:49374",
 };
-const SERVER_VERSION_OPTIONS: ReadonlyArray<OpencodeServerVersion> = ["v1", "v2"];
 const DEFAULT_SERVER_USERNAME = "opencode";
 const FALLBACK_MODEL_PROVIDER = "opencode";
 const FALLBACK_MODEL_ID = "big-pickle";
@@ -497,8 +496,7 @@ export function getWizardServerVersionDefault(
     return "v2";
   }
 
-  const savedVersion = dotenv.parse(existingEnvContent).OPENCODE_SERVER_VERSION;
-  return savedVersion?.trim().toLowerCase() === "v2" ? "v2" : "v1";
+  return "v2";
 }
 
 /** An empty answer keeps the saved password. */
@@ -507,35 +505,6 @@ export function pickServerPassword(
   savedPassword: string | undefined,
 ): string | undefined {
   return answer || savedPassword || undefined;
-}
-
-function formatServerVersion(version: OpencodeServerVersion): string {
-  return version.toUpperCase();
-}
-
-async function askServerVersion(
-  defaultVersion: OpencodeServerVersion,
-): Promise<OpencodeServerVersion> {
-  const prompt = t("runtime.wizard.ask_server_version", {
-    defaultVersion: formatServerVersion(defaultVersion),
-  });
-
-  for (;;) {
-    const answer = (await askVisible(prompt)).toLowerCase();
-
-    if (!answer) {
-      return defaultVersion;
-    }
-
-    const selectedVersion = SERVER_VERSION_OPTIONS.find(
-      (version, index) => answer === version || answer === String(index + 1),
-    );
-    if (selectedVersion) {
-      return selectedVersion;
-    }
-
-    process.stdout.write(t("runtime.wizard.server_version_invalid"));
-  }
 }
 
 async function askApiUrl(serverVersion: OpencodeServerVersion): Promise<string | undefined> {
@@ -616,7 +585,7 @@ async function collectWizardValues(
 
   const token = await askToken();
   const allowedUserId = await askAllowedUserId();
-  const serverVersion = await askServerVersion(getWizardServerVersionDefault(existingEnvContent));
+  const serverVersion: OpencodeServerVersion = "v2";
   const apiUrl = await askApiUrl(serverVersion);
   const serverUsername = await askServerUsername();
   const savedPassword = existingEnvContent

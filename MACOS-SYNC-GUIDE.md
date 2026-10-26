@@ -1,7 +1,7 @@
 # 本次改进总结与 macOS 同步指南
 
 日期：2026-10-26
-Windows 桌面版：1.0.22 → **1.0.25**
+Windows 桌面版：1.0.22 → **1.0.26**
 适用对象：本仓库的 `bot/`（共享）与 `macos/`（Swift Package，需要同步）
 
 > 说明：本次多数修复在共享的 `bot/` 里（Windows 与 macOS 共用同一份 bot 源码），macOS 只需重新打包 bot 就能拿到；**桌面壳**（状态轮询、服务启动、网页端、关闭）需要按本文在 Swift 里对应修改。
@@ -12,11 +12,11 @@ Windows 桌面版：1.0.22 → **1.0.25**
 
 | 制品 | 大小 | SHA256 |
 |---|---|---|
-| `desktop/artifacts/OpenCodeTelegram-Setup-1.0.25.exe` | 688,055,296 B | `9BA75E1444CBB0D297023314FE1596BBCC39A26B6F13AB76EC174A87F0B9CFEF` |
-| `desktop/artifacts/OpenCodeTelegram-1.0.25-Windows-x64.zip` | 682,718,338 B | `83A1F469BD1D487B61DC6AD426C23A3441E528A501AD027B3BF363EB0FBEA533` |
+| `desktop/artifacts/OpenCodeTelegram-Setup-1.0.26.exe` | 688,055,296 B | `F65C262BB4C1A1F4140E6133347064D2479C1FCF23B240DE49CB2614243FE292` |
+| `desktop/artifacts/OpenCodeTelegram-1.0.26-Windows-x64.zip` | 682,718,498 B | `85591AD09637B176F08F5EB029C7E491AAC9887BAA35072E299BE0597A0795DA` |
 
-发布说明：`desktop/releases/desktop-v1.0.23.md`（性能 + 引擎面板修复）、`desktop-v1.0.24.md`（模型重试 + 工具图片）、`desktop-v1.0.25.md`（网页选项目锁定）。
-版本基线：用户已安装的是 **1.0.22**；1.0.23/1.0.24/1.0.25 是其后续（1.0.19–1.0.21 为内部编号，已删除）。
+发布说明：`desktop/releases/desktop-v1.0.23.md`（性能 + 引擎面板修复）、`desktop-v1.0.24.md`（模型重试 + 工具图片）、`desktop-v1.0.25.md`（网页选项目锁定）、`desktop-v1.0.26.md`（DOCX 内容交付）。
+版本基线：用户已安装的是 **1.0.22**；1.0.23–1.0.26 是其后续（1.0.19–1.0.21 为内部编号，已删除）。
 
 ---
 
@@ -31,6 +31,7 @@ Windows 桌面版：1.0.22 → **1.0.25**
 | 5 | 引擎面板"已应用"按钮颜色错误（既有回归） | 内置引擎优先命中蓝色分支 | 已应用（active）一律绿色 + 禁用 | 仅 Windows | 检查 macOS 是否有同款逻辑 |
 | 6 | 拆分源码后产物版本 0.0.0 | 漏传 `AssemblyVersion.cs` | 修复 + 构建期版本校验 | 仅 Windows | 无（Swift 用 Package.swift） |
 | 7 | 网页选了一个手机没有的项目后，页面锁在项目列表 | 共享状态没有 session 时脚本反复把页面拉回根目录；AI 回答期间 `POST /session` 被无条件拦截 | 无 session 不再强制跟随；选中项目后直接打开草稿；创建 session 只锁"当前项目" | 共享 JS | 同上：重新打包即生效（`Build-App.sh` 会复制 `desktop/EmbeddedWebSync.js`） |
+| 8 | 手机发来的 DOCX 模型读不到 | 引擎不会把 OOXML 文本交给纯文本模型（空目录新会话实测确认） | 原始文件存进项目 `.opencode-telegram-attachments/`，prompt 只给路径，agent 用工具读取 | 共享 bot | 无需改，重新打包 bot |
 
 ---
 
@@ -307,6 +308,26 @@ ERROR SessionRunnerModel.ModelUnavailableError: Model unavailable: opencode-go/d
 
 ---
 
+### 2.6 手机发来的 DOCX 模型读不到（共享 bot）
+
+**实测结论**：在**空目录**里新建会话、附件只存在于内存中时，同一个模型对 DOCX 的回答是"没有看到文档内容"——`agent`、`variant` 有无都一样。之前看到"能读"，是因为那份 docx 恰好也在磁盘上，模型用工具自己找到并解压了。**所以引擎并不会把 OOXML 文本交给纯文本模型。**
+
+**改法**（工作区文件约定，Codex/Claude Code 同类做法）：
+
+1. 收到 DOCX 时把**原始文件**写入当前项目的 `.opencode-telegram-attachments/<时间戳>-<随机>-<文件名>`；
+2. prompt 里只追加 `Telegram attachment stored verbatim in the active project: <相对路径>`，**不注入文档文本、不重复发附件**；
+3. agent 用自己的工具读取该文件（解压 `word/document.xml`、python-docx 等），表格、内嵌图片、版式完整保留；
+4. 没有活动项目时回退为纯附件发送；
+5. 与 EOT10 兼容：加密文档先解密，再存档/引用。
+
+测试：
+
+- `bot/tests/bot/handlers/document.test.ts`（DOCX 存档 + prompt 路径；无项目时回退附件）
+
+**macOS**：无需改 Swift；重新打包 bot 后生效。
+
+---
+
 ## 3. 验证与测试
 
 ### 3.1 命令
@@ -373,7 +394,8 @@ npm test -- --maxWorkers=4
 4. **图片**：让 OpenCode 生成/截图一张图 → 手机上应收到照片（EOT10 开启时为加密附件）。
 5. **网页端**：多次在"概览/网页端"之间切换 → 不应反复重建浏览器；网页同步在空闲时约 2 秒一次。
 6. **网页选项目**：在网页项目列表里选一个手机上没打开过的文件夹 → 页面应直接进入该项目的草稿（`/new-session?directory=…`），而不是停在列表；AI 回答期间也能在另一个项目里新建会话。
-7. **关闭**：点关闭 → 1–2 秒内退出，无残留 `GameViewer/opencode/node` 进程。
+7. **DOCX**：从手机发一个 `.docx` 并附一句说明 → 项目目录下出现 `.opencode-telegram-attachments/` 存档，助手用自己的工具读取并复述内容。
+8. **关闭**：点关闭 → 1–2 秒内退出，无残留 `GameViewer/opencode/node` 进程。
 
 ---
 

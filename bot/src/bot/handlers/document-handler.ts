@@ -123,7 +123,10 @@ export async function handleDocumentMessage(
       return;
     }
 
-    if (attachmentMime !== "application/octet-stream") {
+    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    const isDocx = attachmentMime === docxMime || filename.toLowerCase().endsWith(".docx");
+
+    if (attachmentMime !== "application/octet-stream" && !isDocx) {
       const attachmentDataUri = toDataUri(genericAttachmentFile.buffer, attachmentMime);
       const filePart: FilePartInput = {
         type: "file",
@@ -140,6 +143,18 @@ export async function handleDocumentMessage(
 
     const activeProject = getCurrentProject();
     if (!activeProject?.worktree) {
+      if (attachmentMime !== "application/octet-stream") {
+        // No workspace to store the document in: keep the attachment-only behaviour.
+        const fallbackPart: FilePartInput = {
+          type: "file",
+          mime: attachmentMime,
+          filename: filename,
+          url: toDataUri(genericAttachmentFile.buffer, attachmentMime),
+        };
+        await submitPrompt(caption, [fallbackPart], doc.file_size);
+        return;
+      }
+
       await ctx.reply(t("bot.project_not_selected"));
       return;
     }

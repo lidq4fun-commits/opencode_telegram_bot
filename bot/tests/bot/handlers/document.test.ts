@@ -27,6 +27,38 @@ import { initializePromptQueueDispatch } from "../../../src/bot/handlers/prompt-
 import { createTestAppContainer } from "../../helpers/app-container.js";
 import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
 
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/** A minimal stored DOCX (one word/document.xml entry) for the extraction path. */
+function makeDocxBuffer(text: string): Buffer {
+  const nameBytes = Buffer.from("word/document.xml", "utf8");
+  const xml = Buffer.from(
+    `<w:document><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
+    "utf8",
+  );
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(xml.length, 18);
+  local.writeUInt32LE(xml.length, 22);
+  local.writeUInt16LE(nameBytes.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(xml.length, 20);
+  central.writeUInt32LE(xml.length, 24);
+  central.writeUInt16LE(nameBytes.length, 28);
+  const centralOffset = local.length + nameBytes.length + xml.length;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(central.length + nameBytes.length, 12);
+  eocd.writeUInt32LE(centralOffset, 16);
+  return Buffer.concat([local, nameBytes, xml, central, nameBytes, eocd]);
+}
+
 function createDocumentContext(overrides: Partial<Context["message"]> = {}): {
   ctx: Context;
   replyMock: ReturnType<typeof vi.fn>;
@@ -184,6 +216,68 @@ describe("bot/handlers/document", () => {
         expect.stringContaining("Please review this file"),
         deps,
       );
+    });
+
+    it("stores a DOCX in the project and points the prompt at it", async () => {
+      const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "docx-upload-"));
+      const docx = makeDocxBuffer("项目周报内容");
+      const projectSpy = vi
+        .spyOn(settingsStore, "getCurrentProject")
+        .mockReturnValue({ worktree } as ReturnType<typeof settingsStore.getCurrentProject>);
+      const { ctx } = createDocumentContext({
+        document: {
+          file_id: "docx-file-id",
+          file_unique_id: "docx-unique",
+          file_name: "report.docx",
+          mime_type: DOCX_MIME,
+          file_size: docx.length,
+        },
+      });
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({ buffer: docx, filePath: "documents/report.docx" }),
+      });
+
+      await handleDocumentMessage(ctx, deps);
+
+      expect(processPromptMock).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining(
+          "Telegram attachment stored verbatim in the active project: .opencode-telegram-attachments/",
+        ),
+        deps,
+      );
+      expect(processPromptMock.mock.calls[0]).toHaveLength(3);
+
+      const storedDir = path.join(worktree, ".opencode-telegram-attachments");
+      const stored = await fs.readdir(storedDir);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toContain("report.docx");
+      expect((await fs.readFile(path.join(storedDir, stored[0]!))).equals(docx)).toBe(true);
+      projectSpy.mockRestore();
+      await fs.rm(worktree, { recursive: true, force: true });
+    });
+
+    it("sends a DOCX as a file part when no project is active", async () => {
+      const projectSpy = vi.spyOn(settingsStore, "getCurrentProject").mockReturnValue(undefined);
+      const docx = makeDocxBuffer("no project");
+      const { ctx } = createDocumentContext({
+        document: {
+          file_id: "docx-file-id",
+          file_unique_id: "docx-unique",
+          file_name: "report.docx",
+          mime_type: DOCX_MIME,
+          file_size: docx.length,
+        },
+      });
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({ buffer: docx, filePath: "documents/report.docx" }),
+      });
+
+      await handleDocumentMessage(ctx, deps);
+
+      const fileParts = processPromptMock.mock.calls[0]?.[3] as Array<{ mime: string }> | undefined;
+      expect(fileParts).toEqual([expect.objectContaining({ type: "file", mime: DOCX_MIME })]);
+      projectSpy.mockRestore();
     });
 
     it("accepts application/json as text file", async () => {

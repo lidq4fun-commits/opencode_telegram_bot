@@ -256,6 +256,47 @@ describe("bot/handlers/document", () => {
       await fs.rm(worktree, { recursive: true, force: true });
     });
 
+    it("stores an EPUB in the project and points the prompt at it", async () => {
+      const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "epub-upload-"));
+      const epub = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x01, 0x02]);
+      const projectSpy = vi
+        .spyOn(settingsStore, "getCurrentProject")
+        .mockReturnValue({ worktree } as ReturnType<typeof settingsStore.getCurrentProject>);
+      const { ctx } = createDocumentContext({
+        document: {
+          file_id: "epub-file-id",
+          file_unique_id: "epub-unique",
+          file_name: "document123456.epub",
+          mime_type: "application/epub+zip",
+          file_size: epub.length,
+        },
+      });
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({
+          buffer: epub,
+          filePath: "documents/document123456.epub",
+        }),
+      });
+
+      await handleDocumentMessage(ctx, deps);
+
+      expect(processPromptMock).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining("Read this file with your tools before answering"),
+        deps,
+      );
+      expect(processPromptMock.mock.calls[0]?.[1]).toContain(".opencode-telegram-attachments/");
+      expect(processPromptMock.mock.calls[0]).toHaveLength(3);
+
+      const storedDir = path.join(worktree, ".opencode-telegram-attachments");
+      const stored = await fs.readdir(storedDir);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toContain("document123456.epub");
+      expect((await fs.readFile(path.join(storedDir, stored[0]!))).equals(epub)).toBe(true);
+      projectSpy.mockRestore();
+      await fs.rm(worktree, { recursive: true, force: true });
+    });
+
     it("sends a DOCX as a file part when no project is active", async () => {
       const projectSpy = vi.spyOn(settingsStore, "getCurrentProject").mockReturnValue(undefined);
       const docx = makeDocxBuffer("no project");

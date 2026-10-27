@@ -87,6 +87,7 @@ export async function handleDocumentMessage(
       cpp: "text/x-c++", java: "text/x-java", log: "text/plain",
       doc: "application/msword",
       docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      epub: "application/epub+zip",
       rtf: "application/rtf", odt: "application/vnd.oasis.opendocument.text",
       ppt: "application/vnd.ms-powerpoint",
       pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -125,8 +126,10 @@ export async function handleDocumentMessage(
 
     const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     const isDocx = attachmentMime === docxMime || filename.toLowerCase().endsWith(".docx");
+    const isEpub =
+      attachmentMime === "application/epub+zip" || filename.toLowerCase().endsWith(".epub");
 
-    if (attachmentMime !== "application/octet-stream" && !isDocx) {
+    if (attachmentMime !== "application/octet-stream" && !isDocx && !isEpub) {
       const attachmentDataUri = toDataUri(genericAttachmentFile.buffer, attachmentMime);
       const filePart: FilePartInput = {
         type: "file",
@@ -170,11 +173,11 @@ export async function handleDocumentMessage(
       caption.trim(),
       `The user sent a file (${filename}). Its original bytes are stored in the active project at:`,
       `\`${relativePath}\``,
-      "Read this file with your tools before answering; for DOCX unzip word/document.xml if needed. Do not ask the user to paste its contents.",
+      "Read this file with your tools before answering; unzip DOCX/EPUB archives if needed. Do not ask the user to paste its contents.",
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");
-    logger.info(`[Document] Stored unknown binary attachment locally: ${relativePath}`);
+    logger.info(`[Document] Stored document attachment locally: ${relativePath}`);
     await submitPrompt(attachmentPrompt.trim(), [], doc.file_size);
     return;
   } catch (err) {

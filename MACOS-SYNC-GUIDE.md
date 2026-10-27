@@ -1,7 +1,7 @@
 # 本次改进总结与 macOS 同步指南
 
 日期：2026-10-27
-Windows 桌面版：1.0.22 → 1.0.26（2026-10-26）→ **1.0.30**（2026-10-27）
+Windows 桌面版：1.0.22 → 1.0.26（2026-10-26）→ **1.0.31**（2026-10-27）
 适用对象：本仓库的 `bot/`（共享）与 `macos/`（Swift Package，需要同步）
 
 > 说明：本次多数修复在共享的 `bot/` 里（Windows 与 macOS 共用同一份 bot 源码），macOS 只需重新打包 bot 就能拿到；**桌面壳**（状态轮询、服务启动、网页端、关闭）需要按本文在 Swift 里对应修改。
@@ -12,16 +12,16 @@ Windows 桌面版：1.0.22 → 1.0.26（2026-10-26）→ **1.0.30**（2026-10-27
 
 > 本节只列 1.0.26 之后的增量；下面的 §0.1–§6 仍是 1.0.23–1.0.26 的完整说明，macOS 移植时两节都要看。
 
-### 制品与发布（1.0.30）
+### 制品与发布（1.0.31）
 
 | 制品 | 大小 | SHA256 |
 |---|---|---|
+| `desktop/artifacts/OpenCodeTelegram-Setup-1.0.31.exe` | 688,103,936 B | `0ECB63A9D870758DA58AAAEBAB1A666B7B89132BFAD8AB79A5836A8D33F4ED88` |
+| `desktop/artifacts/OpenCodeTelegram-1.0.31-Windows-x64.zip` | 682,758,279 B | `AB4DC6B1A2891AC6A9D1D4A2A1A06F9402B1BA2128798AFD31FDA9D28E70C72B` |
 | `desktop/artifacts/OpenCodeTelegram-Setup-1.0.30.exe` | 688,103,936 B | `4053047A19AE62445F4E5FFC97CB96C08093E59BC3F6A6A93ECFBF7653B84864` |
 | `desktop/artifacts/OpenCodeTelegram-1.0.30-Windows-x64.zip` | 682,758,206 B | `4FEAE70D99349D551598A1CE684BD8EE0C3624B6C302C3EFD6AAF437DF42DB10` |
-| `desktop/artifacts/OpenCodeTelegram-Setup-1.0.29.exe` | 688,103,936 B | `1F994E36F47595FFF00495258D5D215201C309C124BDAC9EE0BBDC337E5FB0FD` |
-| `desktop/artifacts/OpenCodeTelegram-1.0.29-Windows-x64.zip` | 682,758,211 B | `5CE152FD11E9D75D52F2079B893AB4E4C31DB87F95CE10A674531A2131C0000E` |
 
-发布说明：`desktop/releases/desktop-v1.0.27.md`、`v1.0.28.md`、`v1.0.29.md`、`v1.0.30.md`。本机已安装 1.0.27；1.0.30 只调整 DOCX 提示词。
+发布说明：`desktop/releases/desktop-v1.0.27.md` 至 `v1.0.31.md`。本机已安装 1.0.27；1.0.31 把 EPUB 也改为工作区文件交付。
 
 ### A. 共享 bot：新命令
 
@@ -89,6 +89,14 @@ macOS 当前没有这套 `tg whoami` 启动门禁（Swift 只用 `allowedUserID`
   - DOCX 提示可解压 `word/document.xml`；仍不解析、不注入文本、不重复发附件。
 - macOS：只需重新打包 bot，无需改 Swift。
 - 测试：`bot/tests/bot/handlers/document.test.ts` 已更新（16 项通过）。
+
+### G. 1.0.31 增量：EPUB 工作区文件（共享 bot）
+
+- `bot/src/bot/handlers/document-handler.ts`：`application/epub+zip` 与 `.epub` 改为和 DOCX 一样保存到 `.opencode-telegram-attachments/`，不再作为 file part 发送。
+- 提示词统一为 “Read this file with your tools before answering; unzip DOCX/EPUB archives if needed.”。
+- EPUB 正文在 XHTML 中，agent 可用 unzip/文件工具读取；图片资源保留在压缩包内。
+- macOS：只需重新打包 bot，无需改 Swift。
+- 测试：`bot/tests/bot/handlers/document.test.ts` 新增 EPUB 用例（17 项通过）。
 
 ---
 

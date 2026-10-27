@@ -150,8 +150,12 @@ opencode-telegram config
 | `/recent`         | Browse recent sessions across projects and worktrees, see their status and attach directly |
 | `/messages`       | Browse user messages, revert or fork from a previous state     |
 | `/projects`       | Switch between OpenCode projects                        |
+| `/delete_session` | Delete a session of the current project (asks for confirmation) |
+| `/delete_project` | Hide a project on the phone and desktop and delete its sessions; files on disk are kept (asks for confirmation) |
 | `/worktree`       | Switch between existing git worktrees                   |
-| `/open`           | Add a project by browsing directories                   |
+| `/open`           | Add a project by browsing any folder on any drive        |
+| `/create_project` | Browse any folder, enter a name, create that folder inside it and open it as a project |
+| `/connect`        | Connect a model provider by OAuth login or API key; search by name, and the bot deletes the key message after saving it |
 | `/ls`             | List directory contents, then tap to open or download   |
 | `/settings`       | Change bot settings                                     |
 | `/rename`         | Rename the current session                              |
@@ -268,7 +272,7 @@ Configuration can be provided through process environment variables or an `.env`
 | `MESSAGES_LIST_LIMIT`                      | User messages per page in `/messages`                                                                                 |    No    | `10`                     |
 | `PROJECTS_LIST_LIMIT`                      | Projects per page in `/projects`                                                                                      |    No    | `10`                     |
 | `PROJECTS_EXCLUDED_PATHS`                  | Comma-separated absolute paths hidden from `/projects` (exact worktree match)                                        |    No    | *(none)*                 |
-| `OPEN_BROWSER_ROOTS`                       | Comma-separated paths `/open` is allowed to browse (supports `~`)                                                     |    No    | `~` (home directory)     |
+| `OPEN_BROWSER_ROOTS`                       | Comma-separated paths `/open` is allowed to browse (supports `~`). When unset, all drives/folders are browsable |    No    | *(unrestricted)*         |
 | `COMMANDS_LIST_LIMIT`                      | Items per page in `/commands` and `/skills`                                                                           |    No    | `10`                     |
 | `MODELS_LIST_LIMIT`                        | Providers and provider models per page in the model picker                                                            |    No    | `10`                     |
 | `TASK_LIMIT`                               | Maximum number of scheduled tasks that can exist at once                                                              |    No    | `10`                     |

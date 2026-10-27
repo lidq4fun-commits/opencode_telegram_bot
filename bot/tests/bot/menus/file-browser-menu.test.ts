@@ -6,6 +6,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { config } from "../../../src/config.js";
 import {
   LS_CALLBACK_ATTACH_PREFIX,
+  buildOpenRootsKeyboard,
+  renderOpenBrowseView,
   renderLsFileDetailsView,
 } from "../../../src/bot/menus/file-browser-menu.js";
 
@@ -73,6 +75,39 @@ describe("bot/menus/file-browser-menu - attach button", () => {
 
     expect(callbackDataOf(view as never).some((data) => data.startsWith(LS_CALLBACK_ATTACH_PREFIX))).toBe(
       false,
+    );
+  });
+});
+
+describe("bot/menus/file-browser-menu - open cancel", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.realpath(await mkdtemp(path.join(os.tmpdir(), "open-menu-test-")));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps a cancel button on the folder browsing keyboard", async () => {
+    const view = await renderOpenBrowseView(dir, 0, "Create here", "Cancel creation");
+
+    expect("error" in view).toBe(false);
+    expect(callbackDataOf(view as never)).toContain("inline:cancel:open");
+    const labels = (
+      view as { keyboard: { inline_keyboard: Array<Array<{ text?: string }>> } }
+    ).keyboard.inline_keyboard.flat().map((button) => button.text);
+    expect(labels).toContain("Cancel creation");
+  });
+
+  it("keeps a cancel button on the roots keyboard", () => {
+    const keyboard = buildOpenRootsKeyboard("Cancel creation");
+    const callbacks = callbackDataOf({ keyboard } as never);
+
+    expect(callbacks).toContain("inline:cancel:open");
+    expect(keyboard.inline_keyboard.flat().map((button) => button.text)).toContain(
+      "Cancel creation",
     );
   });
 });

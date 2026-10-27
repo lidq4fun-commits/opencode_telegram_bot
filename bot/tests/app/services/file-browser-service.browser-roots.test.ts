@@ -27,17 +27,20 @@ describe("browser-roots", () => {
   });
 
   describe("initBrowserRoots", () => {
-    it("should default to home directory when no env value is provided", () => {
+    it("should default to all filesystem roots when no env value is provided", () => {
       initBrowserRoots(undefined);
       const roots = getBrowserRoots();
-      expect(roots).toHaveLength(1);
-      expect(roots[0]).toBe(path.resolve(os.homedir()));
+      if (process.platform === "win32") {
+        expect(roots.length).toBeGreaterThan(0);
+        expect(roots.every((root) => /^[A-Z]:\\$/.test(root))).toBe(true);
+      } else {
+        expect(roots).toEqual([path.parse(os.homedir()).root || "/"]);
+      }
     });
 
-    it("should default to home directory for empty string", () => {
+    it("should default to all filesystem roots for empty string", () => {
       initBrowserRoots("");
-      const roots = getBrowserRoots();
-      expect(roots).toHaveLength(1);
+      expect(getBrowserRoots().length).toBeGreaterThan(0);
     });
 
     it("should parse comma-separated paths", () => {
@@ -106,6 +109,18 @@ describe("browser-roots", () => {
   });
 
   describe("isWithinAllowedRoot", () => {
+    it("should allow any absolute path when no roots are configured", () => {
+      initBrowserRoots(undefined);
+      expect(isWithinAllowedRoot(process.platform === "win32" ? "Z:\\anywhere" : "/etc")).toBe(
+        true,
+      );
+    });
+
+    it("should ignore relative paths when no roots are configured", () => {
+      initBrowserRoots(undefined);
+      expect(isWithinAllowedRoot("relative/folder")).toBe(false);
+    });
+
     it("should return true for exact root path", () => {
       initBrowserRoots("/home/user/projects");
       expect(isWithinAllowedRoot("/home/user/projects")).toBe(true);

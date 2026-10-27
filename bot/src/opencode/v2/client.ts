@@ -1,5 +1,10 @@
 import type { Event, FilePartInput, TextPartInput, SessionStatus } from "../types.js";
 import { OpenCode, type FormInfo, type OpenCodeClient } from "@opencode/client";
+import type {
+  IntegrationAttempt,
+  IntegrationAttemptStatus,
+  IntegrationInfo,
+} from "@opencode/client";
 import { Service } from "@opencode/client/service";
 import { createV2EventTranslator, type V1GlobalEvent } from "./events.js";
 import {
@@ -62,6 +67,32 @@ export interface V2ClientExtension {
      * cancelled, running sessions continue. Resolves once the rebuilds settle.
      */
     reload: () => Promise<Result<true>>;
+  };
+  integration: {
+    list: () => Promise<Result<IntegrationInfo[]>>;
+    listProviders: () => Promise<
+      Result<Array<{ id: string; name: string; integrationID?: string }>>
+    >;
+    connectOauth: (params: {
+      integrationID: string;
+      methodID: string;
+      answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+    }) => Promise<Result<IntegrationAttempt>>;
+    connectKey: (params: {
+      integrationID: string;
+      key: string;
+      answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+    }) => Promise<Result<true>>;
+    oauthStatus: (params: {
+      integrationID: string;
+      attemptID: string;
+    }) => Promise<Result<IntegrationAttemptStatus>>;
+    oauthComplete: (params: {
+      integrationID: string;
+      attemptID: string;
+      code?: string;
+    }) => Promise<Result<true>>;
+    oauthCancel: (params: { integrationID: string; attemptID: string }) => Promise<Result<true>>;
   };
 }
 
@@ -382,6 +413,72 @@ export function createV2OpencodeClient(options: V2ClientOptions) {
       reload: () =>
         run(async () => {
           await client.location.reload();
+          return true as const;
+        }),
+    },
+    integration: {
+      list: () => run(async () => (await client.integration.list()).data),
+      listProviders: () =>
+        run(async () =>
+          (await client.provider.list()).data.map((provider) => ({
+            id: provider.id,
+            name: provider.name,
+            ...(provider.integrationID ? { integrationID: provider.integrationID } : {}),
+          })),
+        ),
+      connectOauth: (params: {
+        integrationID: string;
+        methodID: string;
+        answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+      }) =>
+        run(
+          async () =>
+            (
+              await client.integration.oauth.connect({
+                integrationID: params.integrationID,
+                methodID: params.methodID,
+                ...(params.answer ? { answer: params.answer } : {}),
+              })
+            ).data,
+        ),
+      oauthStatus: (params: { integrationID: string; attemptID: string }) =>
+        run(
+          async () =>
+            (
+              await client.integration.oauth.status({
+                integrationID: params.integrationID,
+                attemptID: params.attemptID,
+              })
+            ).data,
+        ),
+      connectKey: (params: {
+        integrationID: string;
+        key: string;
+        answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+      }) =>
+        run(async () => {
+          await client.integration.connect.key({
+            integrationID: params.integrationID,
+            key: params.key,
+            ...(params.answer ? { answer: params.answer } : {}),
+          });
+          return true as const;
+        }),
+      oauthComplete: (params: { integrationID: string; attemptID: string; code?: string }) =>
+        run(async () => {
+          await client.integration.oauth.complete({
+            integrationID: params.integrationID,
+            attemptID: params.attemptID,
+            ...(params.code !== undefined ? { code: params.code } : {}),
+          });
+          return true as const;
+        }),
+      oauthCancel: (params: { integrationID: string; attemptID: string }) =>
+        run(async () => {
+          await client.integration.oauth.cancel({
+            integrationID: params.integrationID,
+            attemptID: params.attemptID,
+          });
           return true as const;
         }),
     },

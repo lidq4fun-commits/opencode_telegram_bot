@@ -159,6 +159,50 @@ export function clearProject(): void {
   void writeSettingsFile(currentSettings);
 }
 
+function projectKey(worktree: string): string {
+  const usesWindowsPath =
+    process.platform === "win32" ||
+    /^[A-Za-z]:[\\/]/.test(worktree) ||
+    worktree.startsWith("\\\\");
+  const pathModule = usesWindowsPath ? path.win32 : path.posix;
+  const normalized = pathModule.normalize(worktree);
+  const root = pathModule.parse(normalized).root;
+  const trimmed = normalized === root ? normalized : normalized.replace(/[\\/]+$/, "");
+  return usesWindowsPath ? trimmed.toLowerCase() : trimmed;
+}
+
+/** Canonical keys of projects hidden from the project list on both mobile and desktop. */
+export function getHiddenProjects(): string[] {
+  return [...(currentSettings.hiddenProjects ?? [])];
+}
+
+export function isProjectHidden(worktree: string): boolean {
+  return (currentSettings.hiddenProjects ?? []).includes(projectKey(worktree));
+}
+
+export function hideProject(worktree: string): void {
+  const key = projectKey(worktree);
+  const hidden = currentSettings.hiddenProjects ?? [];
+  if (hidden.includes(key)) {
+    return;
+  }
+
+  currentSettings.hiddenProjects = [...hidden, key];
+  void writeSettingsFile(currentSettings);
+}
+
+export function unhideProject(worktree: string): void {
+  const key = projectKey(worktree);
+  const hidden = currentSettings.hiddenProjects ?? [];
+  if (!hidden.includes(key)) {
+    return;
+  }
+
+  const next = hidden.filter((entry) => entry !== key);
+  currentSettings.hiddenProjects = next.length > 0 ? next : undefined;
+  void writeSettingsFile(currentSettings);
+}
+
 export function getCurrentSession(): SessionInfo | undefined {
   return currentSettings.currentSession;
 }

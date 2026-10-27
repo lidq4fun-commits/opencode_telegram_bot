@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import { realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,7 @@ export interface FileDetails {
 export const MAX_ENTRIES_PER_PAGE = 8;
 
 let resolvedRoots: string[] | null = null;
+let unrestricted = false;
 
 export function getHomeDirectory(): string {
   return os.homedir();
@@ -177,12 +178,28 @@ function normalizePath(p: string): string {
   return isWindows() ? resolved.toLowerCase() : resolved;
 }
 
+function systemRoots(): string[] {
+  if (isWindows()) {
+    const drives: string[] = [];
+    for (let code = 65; code <= 90; code += 1) {
+      const root = `${String.fromCharCode(code)}:\\`;
+      if (existsSync(root)) {
+        drives.push(root);
+      }
+    }
+    if (drives.length > 0) {
+      return drives;
+    }
+  }
+
+  return [path.parse(os.homedir()).root || "/"];
+}
+
 export function initBrowserRoots(raw?: string): void {
   if (!raw || raw.trim() === "") {
-    resolvedRoots = [resolveConfiguredPath(os.homedir())];
-    logger.debug(
-      `[BrowserRoots] No OPEN_BROWSER_ROOTS configured, defaulting to home: ${resolvedRoots[0]}`,
-    );
+    resolvedRoots = systemRoots();
+    unrestricted = true;
+    logger.debug(`[BrowserRoots] Browsing all filesystem roots: ${resolvedRoots.join(", ")}`);
     return;
   }
 
@@ -193,10 +210,12 @@ export function initBrowserRoots(raw?: string): void {
 
   const roots = entries.map((entry) => resolveConfiguredPath(entry));
   if (roots.length === 0) {
-    resolvedRoots = [resolveConfiguredPath(os.homedir())];
-    logger.warn("[BrowserRoots] All configured roots were invalid, falling back to home directory");
+    resolvedRoots = systemRoots();
+    unrestricted = true;
+    logger.warn("[BrowserRoots] All configured roots were invalid, browsing all filesystem roots");
   } else {
     resolvedRoots = roots;
+    unrestricted = false;
     logger.info(`[BrowserRoots] Configured roots: ${roots.join(", ")}`);
   }
 }
@@ -205,7 +224,8 @@ export function getBrowserRoots(): string[] {
   if (resolvedRoots === null) {
     initBrowserRoots(process.env.OPEN_BROWSER_ROOTS);
   }
-  return resolvedRoots!;
+  // Unrestricted browsing follows drives plugged in after startup.
+  return unrestricted ? systemRoots() : resolvedRoots!;
 }
 
 export function getBrowserRootPaths(): string[] {
@@ -213,6 +233,10 @@ export function getBrowserRootPaths(): string[] {
 }
 
 export function isWithinAllowedRoot(targetPath: string): boolean {
+  if (unrestricted) {
+    return path.isAbsolute(expandTilde(targetPath));
+  }
+
   const normalizedTarget = normalizePath(targetPath);
 
   for (const root of getBrowserRoots()) {
@@ -250,6 +274,7 @@ export function isAllowedRoot(targetPath: string): boolean {
 
 export function __resetBrowserRootsForTests(): void {
   resolvedRoots = null;
+  unrestricted = false;
 }
 
 function usesWindowsPath(filePath: string): boolean {

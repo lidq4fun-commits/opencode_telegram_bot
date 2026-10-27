@@ -8,9 +8,11 @@
   const nativeSet = Storage.prototype.setItem;
   const pending = new Map();
   let state, target, version, locale, lastInput = 0, applying = false;
+  let hiddenProjects = new Set();
   let modelTimer, routeTimer, lastRoute = location.pathname + location.search;
   let sequence = 0;
   const parse = (value) => { try { return JSON.parse(value); } catch { return undefined; } };
+  const pathKey = (value) => typeof value === "string" ? value.replace(/[\\/]+$/, "").toLowerCase() : "";
   const modelKey = (model) => model ? `${model.providerID}/${model.modelID || model.id}/${model.variant || "default"}` : "";
   const model = (item, variant) => item?.providerID && (item.modelID || item.id)
     ? { providerID: item.providerID, modelID: item.modelID || item.id, variant: variant ?? item.variant ?? "default" } : undefined;
@@ -167,6 +169,18 @@
         model: model(body?.model, body?.variant) });
     }
     const response = await nativeFetch(input, init);
+    // Projects deleted on the phone are hidden here too: the engine has no delete API,
+    // so the shared state carries their canonical paths and the UI never sees them.
+    if (native && response.ok && method === "GET" && hiddenProjects.size > 0
+      && /^\/(api\/)?project$/.test(url.pathname)) {
+      const list = await response.clone().json().catch(() => undefined);
+      if (Array.isArray(list)) {
+        const visible = list.filter((project) => !hiddenProjects.has(pathKey(project?.canonical || project?.worktree)));
+        if (visible.length !== list.length) {
+          return new Response(JSON.stringify(visible), { status: response.status, statusText: response.statusText, headers: response.headers });
+        }
+      }
+    }
     if (modelUpdate && response.ok) {
       if (model(body?.model)) await send("model", { sessionID: /\/session\/(ses_[\w-]+)/.exec(url.pathname)?.[1], model: model(body.model) });
     }
@@ -179,7 +193,10 @@
   window.__opencodeTelegramSync = {
     accept(next, address, apiVersion, language) {
       const previous = state;
+      const hiddenBefore = (previous?.hiddenProjects || []).join("|");
       state = next; target = address; version = apiVersion; locale = language;
+      hiddenProjects = new Set((next.hiddenProjects || []).map(pathKey));
+      const hiddenChanged = hiddenBefore !== (next.hiddenProjects || []).join("|");
       let selectedDraft;
       for (const ack of next.acknowledgements || []) {
         const request = pending.get(ack.id);
@@ -245,6 +262,21 @@
         } finally { applying = false; }
       }
       lastRoute = location.pathname + location.search;
+      if (next.deletedSession && Date.now() - next.deletedSession.at < 20000
+        && sessionID() === next.deletedSession.id) {
+        // The phone deleted the session this page is showing.
+        location.replace(new URL(target || location.href).origin + "/");
+        return;
+      }
+      if (hiddenChanged) {
+        // The project list only refreshes on load; reload so a project deleted on the
+        // phone disappears here without waiting for the next manual navigation.
+        if (!next.currentSession?.id && version === "v2") {
+          location.replace(new URL(target || location.href).origin + "/");
+        } else {
+          reloadAuthenticated();
+        }
+      }
     },
   };
 })();

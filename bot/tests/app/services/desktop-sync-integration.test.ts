@@ -45,6 +45,7 @@ vi.mock("../../../src/app/stores/settings-store.js", () => ({
   setCurrentProject: (project: ProjectInfo) => {
     mocked.project = project;
   },
+  getHiddenProjects: () => [],
 }));
 vi.mock("../../../src/app/services/session-service.js", () => ({
   getCurrentSession: () => mocked.session,

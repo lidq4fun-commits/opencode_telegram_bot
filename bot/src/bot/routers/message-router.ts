@@ -9,6 +9,12 @@ import {
 } from "../callbacks/model-selection-callback-handler.js";
 import { handleQuestionTextAnswer } from "../callbacks/question-callback-handler.js";
 import { handleRenameTextAnswer } from "../callbacks/rename-callback-handler.js";
+import { handleCreateProjectTextAnswer } from "../callbacks/create-project-callback-handler.js";
+import {
+  handleConnectCodeTextAnswer,
+  handleConnectKeyTextAnswer,
+  handleConnectSearchTextAnswer,
+} from "../callbacks/connect-callback-handler.js";
 import { handleContextButtonPress } from "../menus/context-control-menu.js";
 import { showAgentSelectionMenu } from "../menus/agent-selection-menu.js";
 import { showModelSelectionMenu } from "../menus/model-selection-menu.js";
@@ -221,6 +227,26 @@ export function registerMessageRouter(bot: Bot<Context>, deps: MessageRouterDeps
 
     const handledModelSearchText = await handleModelSearchTextInput(ctx, container);
     if (handledModelSearchText) {
+      return;
+    }
+
+    const handledCreateProject = await handleCreateProjectTextAnswer(ctx, container);
+    if (handledCreateProject) {
+      return;
+    }
+
+    const handledConnectCode = await handleConnectCodeTextAnswer(ctx, container);
+    if (handledConnectCode) {
+      return;
+    }
+
+    const handledConnectKey = await handleConnectKeyTextAnswer(ctx, container);
+    if (handledConnectKey) {
+      return;
+    }
+
+    const handledConnectSearch = await handleConnectSearchTextAnswer(ctx, container);
+    if (handledConnectSearch) {
       return;
     }
 

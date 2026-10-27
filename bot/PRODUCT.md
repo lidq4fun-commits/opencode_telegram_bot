@@ -132,6 +132,11 @@ Current command set:
 - `/recent` - show recent sessions across projects and worktrees with their status and switch directly to one
 - `/messages` - browse user messages in the current session
 - `/projects` - show and switch projects
+- `/delete_session` - delete a session of the current project after confirmation
+- `/delete_project` - hide a project on both phone and desktop and delete all of its sessions after confirmation; files on disk are never deleted
+- `/open` - browse any folder on any drive to add a project (unrestricted unless `OPEN_BROWSER_ROOTS` is set)
+- `/create_project` - browse any folder, enter a folder name, create it there and open it as a project
+- `/connect` - connect a model provider by browser/device OAuth login or API key; providers can be searched by name, device flows work from the phone, loopback browser flows can be finished on the PC or by pasting the redirect link/code, and API-key messages are deleted after saving; the Telegram message updates when the login completes
 - `/worktree` - show and switch existing git worktrees for the current repository
 - `/settings` - change bot settings
 - `/task` - create a scheduled task

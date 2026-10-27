@@ -31,7 +31,7 @@ function fixture(apiVersion = "v2") {
     addEventListener(event, fn) { listeners.set(event, fn); },
     async fetch(input, init) { calls.push({ input, init }); if (input instanceof Request) await input.text(); return response; } };
   vm.runInNewContext(script, { window, document, Storage, localStorage, sessionStorage, location, history,
-    URL, URLSearchParams, Request, TextDecoder, Uint8Array, atob, Date, Math,
+    URL, URLSearchParams, Request, Response, TextDecoder, Uint8Array, atob, Date, Math,
     setTimeout(fn, ms) { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; }, clearTimeout(id) { timers.delete(id); } });
   const state = { instance: "instance", mobileRevision: 1, mobileActive: false, busy: false, updatedAt: Date.now(),
     currentProject: { worktree: "/project" }, currentSession: { id: "ses_shared" }, currentModel: picked, acknowledgements: [] };
@@ -207,3 +207,27 @@ test("a selected project opens its draft even before the bot adopts it", () => {
   assert.equal(f.location.pathname, "/new-session");
   assert.equal(f.location.search, "?directory=%2Fother");
 });
+
+test("projects deleted on the phone are hidden from the desktop project list", async () => {
+  const f = fixture();
+  f.accept({ ...f.state, hiddenProjects: ["/hidden/"] });
+  f.response([{ id: "shown", canonical: "/shown" }, { id: "hidden", canonical: "/hidden" }]);
+  const response = await f.window.fetch(server + "/api/project");
+  assert.deepEqual((await response.json()).map((project) => project.id), ["shown"]);
+});
+
+test("deleting the current project on the phone returns the desktop to the filtered list", () => {
+  const f = fixture();
+  f.accept({ ...f.state, currentSession: undefined, hiddenProjects: ["/project"] });
+  assert.equal(f.location.pathname, "/");
+  assert.equal(f.location.search, "");
+});
+
+test("deleting the current session on the phone leaves its stale desktop page", () => {
+  const f = fixture();
+  f.accept({ ...f.state, currentSession: undefined, deletedSession: { id: "ses_shared", at: Date.now() } });
+  assert.equal(f.location.pathname, "/");
+});
+
+
+

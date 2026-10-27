@@ -17,6 +17,8 @@ const INLINE_MENU_KINDS = [
   "context",
   "open",
   "ls",
+  "delete",
+  "connect",
   "worktree",
   "settings",
 ] as const;

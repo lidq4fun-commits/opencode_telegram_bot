@@ -22,6 +22,22 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 using Forms = System.Windows.Forms;
 
+sealed class TelegramLoginCheck
+{
+    public TelegramLoginStatus Status;
+    public long UserId;
+    public string Detail;
+}
+
+enum TelegramLoginStatus
+{
+    Ok,
+    NotLoggedIn,
+    Network,
+    Unavailable,
+    InvalidAccount
+}
+
 sealed class DesktopApp
 {
     DesktopSettings settings;
@@ -36,6 +52,11 @@ sealed class DesktopApp
     TextBlock openCodeFeedback;
     TextBox logView;
     Button serviceToggle;
+    Button loginRetryButton;
+    DispatcherTimer loginRetryTimer;
+    bool loginRetryRunning;
+    bool loginWarningActive;
+    string loginWarningText;
     Button installV2Button, uninstallV2Button, scanOpenCodeButton, updateOpenCodeButton;
     StackPanel openCodeInstallationsPanel;
     bool openCodeOperationRunning;
@@ -186,17 +207,28 @@ sealed class DesktopApp
         try
         {
             startupInProgress=true;
-            // The Telegram identity check talks to the network for up to 2 seconds; it runs
+            // The Telegram identity check talks to the network for up to 8 seconds; it runs
             // beside the service start instead of delaying it.
             string bound=settings.TelegramUserId;
-            bool loginChecked=!String.IsNullOrWhiteSpace(bound);
-            Task<bool> loginCheck=loginChecked?CheckTelegramLogin():Task.FromResult(true);
+            bool loginChecked=settings.Eot10Enabled&&!String.IsNullOrWhiteSpace(bound);
+            Task<TelegramLoginCheck> loginCheck=loginChecked?CheckTelegramLogin():Task.FromResult(new TelegramLoginCheck{Status=TelegramLoginStatus.Ok});
             await Task.Run(()=>BotRuntime.Start(settings));
-            if(loginChecked&&(!await loginCheck||settings.TelegramUserId!=bound||settings.AllowedUserId!=bound))
+            if(loginChecked)
             {
-                settings.TelegramUserId=bound;
-                await Task.Run(new Action(()=>{try{BotRuntime.Stop(settings);}catch{try{BotRuntime.StopCompetingBotProcesses();}catch{}}}));
-                throw new InvalidOperationException(settings.Locale=="en"?"Telegram login does not match the bound account. Restore the account used during setup with tg login before starting services.":"Telegram 登录与向导绑定账号不一致。请通过 tg login 登录回向导使用的账号后再启动服务。");
+                TelegramLoginCheck check=await loginCheck;
+                string checkedId=check.UserId>0?check.UserId.ToString(CultureInfo.InvariantCulture):"";
+                if(check.Status==TelegramLoginStatus.Ok&&(checkedId!=bound||settings.AllowedUserId!=bound))
+                {
+                    await Task.Run(new Action(()=>{try{BotRuntime.Stop(settings);}catch{try{BotRuntime.StopCompetingBotProcesses();}catch{}}}));
+                    throw new InvalidOperationException(LoginMismatchMessage(checkedId));
+                }
+                if(check.Status!=TelegramLoginStatus.Ok)
+                {
+                    ShowPage(0);
+                    ShowTelegramLoginWarning(check);
+                    return;
+                }
+                ClearTelegramLoginWarning();
             }
             ShowPage(6);
         }
@@ -209,26 +241,175 @@ sealed class DesktopApp
         finally { startupInProgress=false; window.IsEnabled=true; if(serviceToggle!=null)serviceToggle.IsEnabled=true; }
     }
 
-    async Task<bool> CheckTelegramLogin()
+    string LoginMismatchMessage(string checkedId)
+    {
+        bool en=settings.Locale=="en";
+        string expected=String.IsNullOrWhiteSpace(settings.TelegramUserId)?"?":settings.TelegramUserId;
+        string actual=String.IsNullOrWhiteSpace(checkedId)?"?":checkedId;
+        return en
+            ? "Telegram signed-in account ("+actual+") does not match the account bound during setup ("+expected+"). Run tg login with the bound account, then retry."
+            : "Telegram 当前登录账号（"+actual+"）与向导绑定的账号（"+expected+"）不一致。请通过 tg login 登录回绑定的账号后重试。";
+    }
+
+    string TelegramLoginFailureText(TelegramLoginCheck check)
+    {
+        bool en=settings.Locale=="en";
+        if(check.Status==TelegramLoginStatus.Network)
+            return en?"Cannot reach Telegram to verify the account. Check network/VPN/proxy, then retry.":"无法连接 Telegram 验证账号。请检查网络/VPN/代理后重试。";
+        if(check.Status==TelegramLoginStatus.NotLoggedIn)
+            return en?"Not signed in. Complete tg login and retry.":"尚未登录，请完成 tg login 后重试。";
+        if(check.Status==TelegramLoginStatus.InvalidAccount)
+            return en?"tg is signed in to a bot account. Sign in with your personal account.":"tg 当前登录的是机器人账号，请改用个人账号登录。";
+        return (en?"Could not verify Telegram login: ":"无法验证 Telegram 登录：")+(check.Detail??"");
+    }
+
+    void ShowTelegramLoginWarning(TelegramLoginCheck check)
+    {
+        bool en=settings.Locale=="en";
+        loginWarningActive=true;
+        string reason;
+        if(check.Status==TelegramLoginStatus.Network)
+            reason=en
+                ?"Cannot reach Telegram to verify the signed-in account (network or VPN/proxy is down). The Bot keeps running; retrying every 15 seconds."
+                :"无法连接 Telegram 验证登录账号（网络未连接或 VPN/代理未开启）。Bot 仍在运行，每 15 秒自动重试。";
+        else if(check.Status==TelegramLoginStatus.NotLoggedIn)
+            reason=en
+                ?"Telegram is not signed in. Run tg login in a terminal, then retry. The Bot keeps running, but encrypted transport may be unavailable."
+                :"Telegram 尚未登录。请在终端运行 tg login 后重试。Bot 仍在运行，但 EOT10 加密传输可能不可用。";
+        else
+            reason=(en?"Could not verify the Telegram login: ":"无法验证 Telegram 登录：")+(check.Detail??"")+(en?". The Bot keeps running; retrying every 15 seconds.":"。Bot 仍在运行，每 15 秒自动重试。");
+
+        loginWarningText=reason;
+        SetStatus(reason,true);
+        if(loginRetryButton!=null)
+        {
+            loginRetryButton.Visibility=Visibility.Visible;
+            loginRetryButton.Content=settings.Locale=="en"?"Retry verification":"重试验证";
+        }
+        StartTelegramLoginRetryTimer();
+    }
+
+    void ClearTelegramLoginWarning()
+    {
+        loginWarningActive=false;
+        loginWarningText=null;
+        if(loginRetryTimer!=null)loginRetryTimer.Stop();
+        if(loginRetryButton!=null)loginRetryButton.Visibility=Visibility.Collapsed;
+    }
+
+    void StartTelegramLoginRetryTimer()
+    {
+        if(loginRetryTimer==null)
+        {
+            loginRetryTimer=new DispatcherTimer{Interval=TimeSpan.FromSeconds(15)};
+            loginRetryTimer.Tick+=async(s,e)=>await RetryTelegramLogin();
+        }
+        loginRetryTimer.Start();
+    }
+
+    async Task RetryTelegramLogin()
+    {
+        if(!loginWarningActive||loginRetryRunning||startupInProgress)return;
+        loginRetryRunning=true;
+        if(loginRetryButton!=null){loginRetryButton.IsEnabled=false;loginRetryButton.Content=settings.Locale=="en"?"Verifying…":"正在验证…";}
+        try
+        {
+            TelegramLoginCheck check=await CheckTelegramLogin();
+            if(!loginWarningActive)return;
+            string bound=settings.TelegramUserId;
+            string checkedId=check.UserId>0?check.UserId.ToString(CultureInfo.InvariantCulture):"";
+            if(check.Status!=TelegramLoginStatus.Ok)
+            {
+                ShowTelegramLoginWarning(check);
+                return;
+            }
+
+            if(checkedId!=bound||settings.AllowedUserId!=bound)
+            {
+                ClearTelegramLoginWarning();
+                await Task.Run(new Action(()=>{try{BotRuntime.Stop(settings);}catch{try{BotRuntime.StopCompetingBotProcesses();}catch{}}}));
+                string message=LoginMismatchMessage(checkedId);
+                SetStatus((settings.Locale=="en"?"Service stopped: ":"服务已停止：")+message,true);
+                MessageBox.Show(window,message,ProductPaths.AppName,MessageBoxButton.OK,MessageBoxImage.Error);
+                return;
+            }
+
+            ClearTelegramLoginWarning();
+            SetStatus(settings.Locale=="en"?"Telegram account verification recovered.":"Telegram 账号验证已恢复。",false);
+        }
+        catch(Exception ex)
+        {
+            SetStatus((settings.Locale=="en"?"Telegram account verification failed: ":"Telegram 账号验证失败：")+ex.Message,true);
+        }
+        finally
+        {
+            loginRetryRunning=false;
+            if(loginRetryButton!=null){loginRetryButton.IsEnabled=true;loginRetryButton.Content=settings.Locale=="en"?"Retry verification":"重试验证";}
+        }
+    }
+
+    async Task<TelegramLoginCheck> CheckTelegramLogin()
     {
         return await Task.Run(()=>
         {
-            using(var process=new Process { StartInfo=new ProcessStartInfo { FileName=TgExecutable,Arguments="whoami -o json",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true } })
+            try
             {
-                process.Start();
-                var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();
-                if(!process.WaitForExit(30000)){try{process.Kill();}catch{}return false;}
-                Task.WaitAll(output,error);
-                if(process.ExitCode!=0)return false;
-                using(var stream=new MemoryStream(Encoding.UTF8.GetBytes(output.Result)))
+                using(var process=new Process { StartInfo=new ProcessStartInfo { FileName=TgExecutable,Arguments="whoami -o json",UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true } })
                 {
-                    var identity=(TelegramIdentityResult)new DataContractJsonSerializer(typeof(TelegramIdentityResult)).ReadObject(stream);
-                    if(identity==null||identity.Data==null||identity.Data.Bot||identity.Data.Id<=0)return false;
-                    settings.TelegramUserId=identity.Data.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                    return true;
+                    process.Start();
+                    var output=process.StandardOutput.ReadToEndAsync();
+                    var error=process.StandardError.ReadToEndAsync();
+                    if(!process.WaitForExit(8000))
+                    {
+                        try{process.Kill();}catch{}
+                        return new TelegramLoginCheck{Status=TelegramLoginStatus.Network,Detail="tg whoami timed out"};
+                    }
+                    Task.WaitAll(output,error);
+                    string stdout=output.Result??"";
+                    string stderr=error.Result??"";
+                    if(process.ExitCode!=0)return ClassifyTelegramLoginFailure(stdout+"\n"+stderr,process.ExitCode);
+                    try
+                    {
+                        using(var stream=new MemoryStream(Encoding.UTF8.GetBytes(stdout)))
+                        {
+                            var identity=(TelegramIdentityResult)new DataContractJsonSerializer(typeof(TelegramIdentityResult)).ReadObject(stream);
+                            if(identity==null||identity.Data==null||identity.Data.Id<=0)return new TelegramLoginCheck{Status=TelegramLoginStatus.NotLoggedIn,Detail="tg whoami returned no account"};
+                            if(identity.Data.Bot)return new TelegramLoginCheck{Status=TelegramLoginStatus.InvalidAccount,Detail="tg is signed in to a bot account"};
+                            return new TelegramLoginCheck{Status=TelegramLoginStatus.Ok,UserId=identity.Data.Id};
+                        }
+                    }
+                    catch(Exception ex)
+                    {
+                        return new TelegramLoginCheck{Status=TelegramLoginStatus.Unavailable,Detail=ex.Message};
+                    }
                 }
             }
+            catch(Exception ex)
+            {
+                return new TelegramLoginCheck{Status=TelegramLoginStatus.Unavailable,Detail=ex.Message};
+            }
         });
+    }
+
+    static TelegramLoginCheck ClassifyTelegramLoginFailure(string text,int exitCode)
+    {
+        string lower=(text??"").ToLowerInvariant();
+        string[] loginMarkers={"auth_key","unauthorized","not authorized","not logged","no active session","session not found","session revoked","login required","user_deactivated","401"};
+        foreach(string marker in loginMarkers)
+            if(lower.Contains(marker))return new TelegramLoginCheck{Status=TelegramLoginStatus.NotLoggedIn,Detail=FirstTelegramLine(text)};
+        string[] networkMarkers={"timeout","timed out","deadline","connection","network","proxy","dial","tls","eof","unreachable","unavailable","internet","refused","reset"};
+        foreach(string marker in networkMarkers)
+            if(lower.Contains(marker))return new TelegramLoginCheck{Status=TelegramLoginStatus.Network,Detail=FirstTelegramLine(text)};
+        string detail=FirstTelegramLine(text);
+        return new TelegramLoginCheck{Status=TelegramLoginStatus.Unavailable,Detail=(detail.Length>0?detail:"tg exited with code "+exitCode)};
+    }
+
+    static string FirstTelegramLine(string text)
+    {
+        if(String.IsNullOrWhiteSpace(text))return "";
+        string[] lines=text.Trim().Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries);
+        string line=lines.Length>0?lines[0]:"";
+        return line.Length>180?line.Substring(0,180):line;
     }
 
     void ShowSetupStep()
@@ -276,17 +457,34 @@ sealed class DesktopApp
             wizardBusy=true;next.IsEnabled=false;back.IsEnabled=false;
             try
             {
-                if(step==0&&!await CheckTelegramLogin()){wizardFeedback.Text=settings.Locale=="en"?"Not signed in. Complete tg login and retry.":"尚未登录，请完成 tg login 后重试。";return;}
-                if(step==0)settings.AllowedUserId=settings.TelegramUserId;
+                if(step==0)
+                {
+                    TelegramLoginCheck check=await CheckTelegramLogin();
+                    if(check.Status!=TelegramLoginStatus.Ok)
+                    {
+                        wizardFeedback.Text=TelegramLoginFailureText(check);
+                        return;
+                    }
+                    settings.TelegramUserId=check.UserId.ToString(CultureInfo.InvariantCulture);
+                    settings.AllowedUserId=settings.TelegramUserId;
+                }
                 if(step>0&&!SaveSettings(false))return;
                 if(step==1&&(!Regex.IsMatch(settings.BotToken??"",@"^\d+:[A-Za-z0-9_-]+$")||!Regex.IsMatch(settings.AllowedUserId??"",@"^[1-9]\d*$"))){wizardFeedback.Text=settings.Locale=="en"?"Enter a valid Bot Token and personal user ID.":"请填写有效的 Bot Token 和个人用户数字 ID。";return;}
                 if(step==1||step==3)
                 {
-                    if(!await CheckTelegramLogin()||settings.AllowedUserId!=settings.TelegramUserId)
+                    TelegramLoginCheck check=await CheckTelegramLogin();
+                    if(check.Status!=TelegramLoginStatus.Ok)
+                    {
+                        wizardFeedback.Text=TelegramLoginFailureText(check);
+                        return;
+                    }
+                    string checkedId=check.UserId.ToString(CultureInfo.InvariantCulture);
+                    if(settings.AllowedUserId!=checkedId)
                     {
                         wizardFeedback.Text=settings.Locale=="en"?"The bound user must match tg whoami. Go back to Telegram login and bind the same personal account.":"绑定用户必须与 tg whoami 的登录账号一致。请返回 Telegram 登录步骤，使用同一个个人账号绑定。";
                         return;
                     }
+                    settings.TelegramUserId=checkedId;
                 }
                 if(step==3)
                 {
@@ -331,8 +529,10 @@ sealed class DesktopApp
         stack.Children.Add(Label("运行状态", 13, true, Color.FromRgb(112, 120, 140)));
         statusText = Label("正在读取 Bot 状态…", 20, true, Color.FromRgb(39, 46, 65)); stack.Children.Add(statusText);
         var row = Row(); serviceToggle=ActionButton("启动服务", true); serviceToggle.MinWidth=150; serviceToggle.IsEnabled=!startupInProgress; var refresh = ActionButton("刷新状态", false);
+        loginRetryButton=ActionButton(settings.Locale=="en"?"Retry verification":"重试验证",false); loginRetryButton.Visibility=loginWarningActive?Visibility.Visible:Visibility.Collapsed; loginRetryButton.Click+=async(s,e)=>await RetryTelegramLogin();
         serviceToggle.Click += async (s,e) => await RunBotAction(serviceToggle.Tag as string??"start", true); refresh.Click += (s,e) => RefreshStatus();
-        row.Children.Add(serviceToggle); row.Children.Add(refresh); stack.Children.Add(row); content.Children.Add(card);
+        row.Children.Add(serviceToggle); row.Children.Add(refresh); row.Children.Add(loginRetryButton); stack.Children.Add(row); content.Children.Add(card);
+        if(loginWarningActive&&!String.IsNullOrWhiteSpace(loginWarningText))SetStatus(loginWarningText,true);
         var logs=Card(); var logStack=new StackPanel(); logs.Child=logStack; var logHeader=Row(); logHeader.Children.Add(Label("运行日志",16,true,Color.FromRgb(39,46,65))); var reloadLog=ActionButton("刷新日志",false); reloadLog.Click+=(s,e)=>LoadLog(); logHeader.Children.Add(reloadLog); logStack.Children.Add(logHeader);
         logView=new TextBox{IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,FontFamily=new FontFamily("Consolas"),FontSize=12,Height=230,Background=new SolidColorBrush(Color.FromRgb(25,29,38)),Foreground=new SolidColorBrush(Color.FromRgb(220,226,238)),Padding=new Thickness(12)}; logStack.Children.Add(logView); content.Children.Add(logs); LoadLog();
         var hint = Card(); var hs = new StackPanel(); hint.Child=hs; hs.Children.Add(Label("快速开始",16,true,Color.FromRgb(39,46,65))); hs.Children.Add(Label("先绑定 Telegram Bot，再设置 OpenCode 地址和 EOT10 密码。所有凭据保存在当前 Windows 用户的 DPAPI 加密设置中。",13,false,Color.FromRgb(105,113,133))); content.Children.Add(hint);
@@ -962,7 +1162,8 @@ sealed class DesktopApp
             if(serviceActionRunning)return;
             // Keep the last visible status while polling or awaiting a usable result.
             if(String.IsNullOrWhiteSpace(serviceStatus))return;
-            SetStatus(serviceStatus,false);
+            if(loginWarningActive&&!String.IsNullOrWhiteSpace(loginWarningText))SetStatus(loginWarningText,true);
+            else SetStatus(serviceStatus,false);
             bool running=serviceStatus.IndexOf("Service status: running",StringComparison.OrdinalIgnoreCase)>=0;
             if(serviceToggle!=null){serviceToggle.Content=Ui(running?"停止服务":"启动服务");serviceToggle.Tag=running?"stop":"start";serviceToggle.Background=running?new SolidColorBrush(Color.FromRgb(180,65,65)):new SolidColorBrush(Color.FromRgb(43,103,230));}
             activeServiceLogPath=running?GetStatusValue(serviceStatus,"Log file:"):null;

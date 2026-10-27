@@ -1,14 +1,87 @@
 # 本次改进总结与 macOS 同步指南
 
-日期：2026-10-26
-Windows 桌面版：1.0.22 → **1.0.26**
+日期：2026-10-27
+Windows 桌面版：1.0.22 → 1.0.26（2026-10-26）→ **1.0.29**（2026-10-27）
 适用对象：本仓库的 `bot/`（共享）与 `macos/`（Swift Package，需要同步）
 
 > 说明：本次多数修复在共享的 `bot/` 里（Windows 与 macOS 共用同一份 bot 源码），macOS 只需重新打包 bot 就能拿到；**桌面壳**（状态轮询、服务启动、网页端、关闭）需要按本文在 Swift 里对应修改。
 
 ---
 
-## 0. 本次交付
+## 0. 2026-10-27 增量（1.0.27–1.0.29）
+
+> 本节只列 1.0.26 之后的增量；下面的 §0.1–§6 仍是 1.0.23–1.0.26 的完整说明，macOS 移植时两节都要看。
+
+### 制品与发布（1.0.29）
+
+| 制品 | 大小 | SHA256 |
+|---|---|---|
+| `desktop/artifacts/OpenCodeTelegram-Setup-1.0.29.exe` | 688,103,936 B | `1F994E36F47595FFF00495258D5D215201C309C124BDAC9EE0BBDC337E5FB0FD` |
+| `desktop/artifacts/OpenCodeTelegram-1.0.29-Windows-x64.zip` | 682,758,211 B | `5CE152FD11E9D75D52F2079B893AB4E4C31DB87F95CE10A674531A2131C0000E` |
+
+发布说明：`desktop/releases/desktop-v1.0.27.md`、`desktop-v1.0.28.md`、`desktop-v1.0.29.md`。本机已安装 1.0.27；1.0.29 修复登录检查误报，并加入 `/connect` 的手机方式标记。
+
+### A. 共享 bot：新命令
+
+以下都在共享 `bot/`，macOS 重新打包 bot 即生效。
+
+| 命令 | 关键文件 | 行为 |
+|---|---|---|
+| `/connect` | `app/services/provider-connection-service.ts`、`bot/commands/connect-command.ts`、`bot/callbacks/connect-callback-handler.ts`、`bot/menus/connect-menu.ts`、`bot/services/provider-connect-runtime.ts` | 读取引擎 `/api/integration`，支持 OAuth 与 API Key；OAuth 每 3 秒轮询；设备码方式标 📱，localhost 回调方式标 🖥️；API Key 消息读取后立即删除；支持搜索、已连接标记、取消、过期 |
+| `/create_project` | `bot/commands/create-project-command.ts`、`bot/callbacks/create-project-callback-handler.ts` | 复用 `/open` 浏览器（新增 `createProject` 元数据、选择按钮「在此创建」、浏览阶段「取消创建」）；输入名称后 `mkdir`、写入项目缓存并切换；校验 Windows 保留名、非法字符、结尾点/空格、重名、超长 |
+| `/delete_session` | `bot/commands/delete-session-command.ts`、`bot/callbacks/delete-callback-handler.ts`、`bot/menus/delete-menu.ts` | 列出当前项目会话，二次确认后删除；删除当前会话时清理 attach/置顶 |
+| `/delete_project` | 同上 + `bot/commands/delete-project-command.ts` | 隐藏项目（`settings.hiddenProjects`）并删除其全部会话；磁盘文件不动；当前项目被删时清理状态；通过 `/open` 重新选择可恢复 |
+| `/open` 无限制 | `app/services/file-browser-service.ts` | 未设置 `OPEN_BROWSER_ROOTS` 时 Windows 枚举全部盘符、macOS/Linux 从 `/` 开始；新盘符实时出现；仍可用环境变量限制 |
+
+配套改动：`bot/src/bot/commands/definitions.ts`、`routers/command-router.ts`、`callbacks/callback-router.ts`、`middleware/interaction-guard-decision.ts`、`menus/inline-menu.ts`，13 种语言的 `i18n/*.ts`。
+
+### B. 共享 JS：桌面网页同步
+
+`desktop/EmbeddedWebSync.js` 新增：
+
+- `hiddenProjects`：过滤 `GET /api/project` 返回中被 `/delete_project` 隐藏的项目；隐藏列表变化时刷新页面。
+- `deletedSession`：手机删除会话后，桌面若正停在该会话页，自动退回项目列表。
+- 项目列表变化（隐藏/恢复）会触发刷新。
+
+macOS 的 `macos/Sources/OpenCodeTelegram/EmbeddedWeb.swift` 直接把 `state.json` 的原始 JSON 传给 `accept(...)`，新字段自动透传，**不需要改 Swift 数据结构**；但必须确认 `macos/Build-App.sh` 复制的是最新 `desktop/EmbeddedWebSync.js`。
+
+### C. Windows 桌面壳：登录检查修复（仅 Windows）
+
+`desktop/src/DesktopApp.cs`：
+
+- `CheckTelegramLogin` 从 `bool` 改为 `TelegramLoginCheck`，区分 `Ok / NotLoggedIn / Network / Unavailable / InvalidAccount`，超时 30 s → 8 s。
+- 网络不通/未登录/未知错误：**不停止 Bot**，概览页显示明确警告，每 15 秒自动重试，新增「重试验证」按钮。
+- 只有 `tg whoami` 成功且账号与向导绑定账号不同，才停止服务并明确显示两端 ID。
+- 仅在 `Eot10Enabled` 开启时检查 `tg`；关闭 EOT10 不再被 Telegram 登录状态阻塞。
+- 向导步骤 0/1/3 改为使用返回结果，不再依赖方法内部修改 `settings.TelegramUserId`。
+- 新增测试：`desktop/tests/Test-TelegramLoginCheck.ps1`（5 项分类检查）。
+
+macOS 当前没有这套 `tg whoami` 启动门禁（Swift 只用 `allowedUserID`）；如果以后加上，按同样分类与重试策略实现，不要用“账号不一致”覆盖网络错误。
+
+### D. macOS 检查表（增量）
+
+- [ ] 重新打包 bot（`Prepare-Runtime.sh` / `Build-App.sh`），确认 bundle 内包含：
+  - `bot/dist/bot/commands/connect-command.js`
+  - `bot/dist/bot/commands/create-project-command.js`
+  - `bot/dist/bot/commands/delete-session-command.js`、`delete-project-command.js`
+  - `bot/dist/bot/callbacks/connect-callback-handler.js`、`create-project-callback-handler.js`、`delete-callback-handler.js`
+  - `bot/dist/app/services/provider-connection-service.js`
+  - `bot/dist/bot/services/provider-connect-runtime.js`
+- [ ] 确认 `Build-App.sh` 复制最新 `desktop/EmbeddedWebSync.js`，并包含 `hiddenProjects` / `deletedSession`。
+- [ ] 不需要新增 Swift 文件；`/connect`、`/create_project`、`/delete_*`、`/open` 均为共享 bot 功能。
+- [ ] 跑 bot 测试（见 §3.1）和 macOS 桌面测试。
+- [ ] 手工验收：OpenAI 用 **📱 Codex device code** 在手机完成；`/create_project` 创建并进入；`/delete_project` 后手机和桌面项目列表都消失；`/open` 能浏览其他磁盘。
+
+### E. 增量测试结果
+
+- Bot：**2437 passed / 7 skipped**（205 个测试文件）。
+- 桌面登录分类：**5 项全过**。
+- 网页同步：**25 项全过**。
+- 程序集：`1.0.29.0`。
+
+---
+
+## 0.1 2026-10-26 交付（1.0.23–1.0.26）
 
 | 制品 | 大小 | SHA256 |
 |---|---|---|

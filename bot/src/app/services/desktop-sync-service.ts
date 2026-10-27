@@ -7,7 +7,7 @@ import type { ModelInfo } from "../types/model.js";
 import { config } from "../../config.js";
 import { getRuntimePaths } from "../../runtime/paths.js";
 import { opencodeClient } from "../../opencode/client.js";
-import { getCurrentProject, setCurrentProject } from "../stores/settings-store.js";
+import { getCurrentProject, getHiddenProjects, setCurrentProject } from "../stores/settings-store.js";
 import { clearSession, getCurrentSession, setCurrentSession } from "./session-service.js";
 import { getStoredModel, selectModel } from "./model-selection-service.js";
 import { applySessionSettings } from "./session-settings-service.js";
@@ -21,9 +21,16 @@ import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 let mobileRevision = 0;
 let mobileOperations = 0;
 let desktopOperation: Promise<void> | undefined;
+let deletedSession: { id: string; at: number } | undefined;
 
 /** The desktop treats sync state older than 6 seconds as disconnected. */
 const STATE_HEARTBEAT_MS = 2000;
+const DELETED_SESSION_TTL_MS = 15_000;
+
+/** Lets an embedded page leave a session that the phone just deleted. */
+export function noteDesktopSessionDeleted(sessionID: string): void {
+  deletedSession = { id: sessionID, at: Date.now() };
+}
 
 /** Phone mutations run after an already admitted desktop attach has finished. */
 export async function waitForDesktopSyncIdle(): Promise<void> {
@@ -115,6 +122,11 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
     currentProject: getCurrentProject(),
     currentSession: getCurrentSession() ?? undefined,
     currentModel: getStoredModel(),
+    hiddenProjects: getHiddenProjects(),
+    deletedSession:
+      deletedSession && Date.now() - deletedSession.at < DELETED_SESSION_TTL_MS
+        ? deletedSession
+        : undefined,
   });
 
   async function apply(command: DesktopSyncCommand): Promise<void> {

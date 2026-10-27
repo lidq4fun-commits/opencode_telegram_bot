@@ -6,8 +6,12 @@ import { opencodeStartCommand } from "../commands/opencode-start-command.js";
 import { opencodeStopCommand } from "../commands/opencode-stop-command.js";
 import { reloadCommand } from "../commands/reload-command.js";
 import { projectsCommand } from "../commands/projects-command.js";
+import { deleteSessionCommand } from "../commands/delete-session-command.js";
+import { deleteProjectCommand } from "../commands/delete-project-command.js";
 import { worktreeCommand } from "../commands/worktree-command.js";
 import { openCommand } from "../commands/open-command.js";
+import { createProjectCommand } from "../commands/create-project-command.js";
+import { connectCommand } from "../commands/connect-command.js";
 import { lsCommand } from "../commands/ls-command.js";
 import { sessionsCommand } from "../commands/sessions-command.js";
 import { recentCommand } from "../commands/recent-command.js";
@@ -95,8 +99,12 @@ export function registerCommandRouter(bot: Bot<Context>, deps: CommandRouterDeps
     bot.command("reload", (ctx) => reloadCommand(ctx, container));
   }
   bot.command("projects", (ctx) => projectsCommand(ctx, container));
+  bot.command("delete_session", (ctx) => deleteSessionCommand(ctx, container));
+  bot.command("delete_project", (ctx) => deleteProjectCommand(ctx, container));
   bot.command("worktree", (ctx) => worktreeCommand(ctx, container));
   bot.command("open", (ctx) => openCommand(ctx, container));
+  bot.command("create_project", (ctx) => createProjectCommand(ctx, container));
+  bot.command("connect", (ctx) => connectCommand(ctx, container));
   bot.command("ls", (ctx) => lsCommand(ctx, container));
   bot.command("sessions", (ctx) => sessionsCommand(ctx, container));
   bot.command("recent", (ctx) => recentCommand(ctx, container));

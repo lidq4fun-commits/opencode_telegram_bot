@@ -396,30 +396,41 @@ describe("bot/handlers/document", () => {
   });
 
   describe("recognized binary types", () => {
-    it("sends a PDF as a file part without model capability gating", async () => {
-      const { ctx, replyMock } = createDocumentContext({
+    it("stores a PDF in the project and points the prompt at it", async () => {
+      const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-upload-"));
+      const pdf = Buffer.from("%PDF-1.7\n");
+      const projectSpy = vi
+        .spyOn(settingsStore, "getCurrentProject")
+        .mockReturnValue({ worktree } as ReturnType<typeof settingsStore.getCurrentProject>);
+      const { ctx } = createDocumentContext({
         document: {
           file_id: "pdf-file-id",
           file_unique_id: "pdf-unique-id",
           file_name: "document.pdf",
           mime_type: "application/pdf",
-          file_size: 5000,
+          file_size: pdf.length,
         },
       });
-      const { deps, processPromptMock, downloadMock } = createDocumentDeps();
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({ buffer: pdf, filePath: "documents/document.pdf" }),
+      });
 
       await handleDocumentMessage(ctx, deps);
 
-      expect(replyMock).toHaveBeenCalledWith(t("bot.file_downloading"));
-      expect(downloadMock).toHaveBeenCalled();
       expect(processPromptMock).toHaveBeenCalledWith(
         ctx,
-        "",
+        expect.stringContaining("Read this file with your tools before answering"),
         deps,
-        expect.arrayContaining([
-          expect.objectContaining({ type: "file", mime: "application/pdf" }),
-        ]),
       );
+      expect(processPromptMock.mock.calls[0]?.[1]).toContain(".opencode-telegram-attachments/");
+
+      const storedDir = path.join(worktree, ".opencode-telegram-attachments");
+      const stored = await fs.readdir(storedDir);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toContain("document.pdf");
+      expect((await fs.readFile(path.join(storedDir, stored[0]!))).equals(pdf)).toBe(true);
+      projectSpy.mockRestore();
+      await fs.rm(worktree, { recursive: true, force: true });
     });
 
     it("sends an image document as a file part without model capability gating", async () => {

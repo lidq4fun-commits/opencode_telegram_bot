@@ -1,7 +1,7 @@
 # 本次改进总结与 macOS 同步指南
 
 日期：2026-10-27
-Windows 桌面版：1.0.22 → 1.0.26（2026-10-26）→ **1.0.31**（2026-10-27）
+Windows 桌面版：1.0.22 → 1.0.26（2026-10-26）→ **1.0.32**（2026-10-27）
 适用对象：本仓库的 `bot/`（共享）与 `macos/`（Swift Package，需要同步）
 
 > 说明：本次多数修复在共享的 `bot/` 里（Windows 与 macOS 共用同一份 bot 源码），macOS 只需重新打包 bot 就能拿到；**桌面壳**（状态轮询、服务启动、网页端、关闭）需要按本文在 Swift 里对应修改。
@@ -12,16 +12,16 @@ Windows 桌面版：1.0.22 → 1.0.26（2026-10-26）→ **1.0.31**（2026-10-27
 
 > 本节只列 1.0.26 之后的增量；下面的 §0.1–§6 仍是 1.0.23–1.0.26 的完整说明，macOS 移植时两节都要看。
 
-### 制品与发布（1.0.31）
+### 制品与发布（1.0.32）
 
 | 制品 | 大小 | SHA256 |
 |---|---|---|
+| `desktop/artifacts/OpenCodeTelegram-Setup-1.0.32.exe` | 688,103,936 B | `357EE6D94014A67D58E6E68E2F3692B0AAFE8E0B4EC5FBBEE1BAC0C0F4E330F6` |
+| `desktop/artifacts/OpenCodeTelegram-1.0.32-Windows-x64.zip` | 682,758,305 B | `F1EB46CCE5B8ADD4C726734D72ED4DD6189D8A48CB5C67B4358B017FCC3ED13F` |
 | `desktop/artifacts/OpenCodeTelegram-Setup-1.0.31.exe` | 688,103,936 B | `0ECB63A9D870758DA58AAAEBAB1A666B7B89132BFAD8AB79A5836A8D33F4ED88` |
 | `desktop/artifacts/OpenCodeTelegram-1.0.31-Windows-x64.zip` | 682,758,279 B | `AB4DC6B1A2891AC6A9D1D4A2A1A06F9402B1BA2128798AFD31FDA9D28E70C72B` |
-| `desktop/artifacts/OpenCodeTelegram-Setup-1.0.30.exe` | 688,103,936 B | `4053047A19AE62445F4E5FFC97CB96C08093E59BC3F6A6A93ECFBF7653B84864` |
-| `desktop/artifacts/OpenCodeTelegram-1.0.30-Windows-x64.zip` | 682,758,206 B | `4FEAE70D99349D551598A1CE684BD8EE0C3624B6C302C3EFD6AAF437DF42DB10` |
 
-发布说明：`desktop/releases/desktop-v1.0.27.md` 至 `v1.0.31.md`。本机已安装 1.0.27；1.0.31 把 EPUB 也改为工作区文件交付。
+发布说明：`desktop/releases/desktop-v1.0.27.md` 至 `v1.0.32.md`。本机已安装 1.0.27；1.0.32 统一所有非媒体文档的工作区文件交付。
 
 ### A. 共享 bot：新命令
 
@@ -97,6 +97,17 @@ macOS 当前没有这套 `tg whoami` 启动门禁（Swift 只用 `allowedUserID`
 - EPUB 正文在 XHTML 中，agent 可用 unzip/文件工具读取；图片资源保留在压缩包内。
 - macOS：只需重新打包 bot，无需改 Swift。
 - 测试：`bot/tests/bot/handlers/document.test.ts` 新增 EPUB 用例（17 项通过）。
+
+### H. 1.0.32 增量：所有文档格式统一工作区文件（共享 bot）
+
+- `bot/src/bot/handlers/document-handler.ts` 的文档路由改为：
+  - 文本类 → prompt 文本；
+  - 图片/音频/视频 → file part；
+  - **其他所有文档/压缩包**（PDF、DOC/DOCX、ODT、RTF、PPT/PPTX、XLS/XLSX、EPUB、ZIP/TAR/GZ/RAR/7Z、未知二进制）→ 存到 `.opencode-telegram-attachments/` 并给路径；
+  - 无活动项目时回退 file part。
+- 提示词统一为 “Read this file with your tools before answering; unzip/extract DOCX, EPUB, PDF, Office or archive formats if needed.”。
+- macOS：只需重新打包 bot，无需改 Swift。
+- 测试：`bot/tests/bot/handlers/document.test.ts` 17 项通过（DOCX/EPUB/PDF 存储、图片 file part）。
 
 ---
 

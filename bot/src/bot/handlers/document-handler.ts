@@ -124,12 +124,9 @@ export async function handleDocumentMessage(
       return;
     }
 
-    const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    const isDocx = attachmentMime === docxMime || filename.toLowerCase().endsWith(".docx");
-    const isEpub =
-      attachmentMime === "application/epub+zip" || filename.toLowerCase().endsWith(".epub");
+    const isMedia = /^(image|audio|video)\//i.test(attachmentMime);
 
-    if (attachmentMime !== "application/octet-stream" && !isDocx && !isEpub) {
+    if (isMedia) {
       const attachmentDataUri = toDataUri(genericAttachmentFile.buffer, attachmentMime);
       const filePart: FilePartInput = {
         type: "file",
@@ -138,7 +135,7 @@ export async function handleDocumentMessage(
         url: attachmentDataUri,
       };
       logger.info(
-        `[Document] Sending file (${genericAttachmentFile.buffer.length} bytes, ${filename}, ${attachmentMime}) with prompt`,
+        `[Document] Sending media file (${genericAttachmentFile.buffer.length} bytes, ${filename}, ${attachmentMime}) with prompt`,
       );
       await submitPrompt(caption, [filePart], doc.file_size);
       return;
@@ -173,7 +170,7 @@ export async function handleDocumentMessage(
       caption.trim(),
       `The user sent a file (${filename}). Its original bytes are stored in the active project at:`,
       `\`${relativePath}\``,
-      "Read this file with your tools before answering; unzip DOCX/EPUB archives if needed. Do not ask the user to paste its contents.",
+      "Read this file with your tools before answering; unzip/extract DOCX, EPUB, PDF, Office or archive formats if needed. Do not ask the user to paste its contents.",
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");

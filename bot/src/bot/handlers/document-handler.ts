@@ -166,7 +166,14 @@ export async function handleDocumentMessage(
     const storedPath = path.join(attachmentDirectory, storedFilename);
     await fs.writeFile(storedPath, genericAttachmentFile.buffer);
     const relativePath = path.relative(activeProject.worktree, storedPath).split(path.sep).join("/");
-    const attachmentPrompt = `${caption.trim()}\n\nTelegram attachment stored verbatim in the active project: ${relativePath}`;
+    const attachmentPrompt = [
+      caption.trim(),
+      `The user sent a file (${filename}). Its original bytes are stored in the active project at:`,
+      `\`${relativePath}\``,
+      "Read this file with your tools before answering; for DOCX unzip word/document.xml if needed. Do not ask the user to paste its contents.",
+    ]
+      .filter((part) => part.length > 0)
+      .join("\n\n");
     logger.info(`[Document] Stored unknown binary attachment locally: ${relativePath}`);
     await submitPrompt(attachmentPrompt.trim(), [], doc.file_size);
     return;

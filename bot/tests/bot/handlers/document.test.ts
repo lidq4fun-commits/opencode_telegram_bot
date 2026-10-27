@@ -241,11 +241,10 @@ describe("bot/handlers/document", () => {
 
       expect(processPromptMock).toHaveBeenCalledWith(
         ctx,
-        expect.stringContaining(
-          "Telegram attachment stored verbatim in the active project: .opencode-telegram-attachments/",
-        ),
+        expect.stringContaining("Read this file with your tools before answering"),
         deps,
       );
+      expect(processPromptMock.mock.calls[0]?.[1]).toContain(".opencode-telegram-attachments/");
       expect(processPromptMock.mock.calls[0]).toHaveLength(3);
 
       const storedDir = path.join(worktree, ".opencode-telegram-attachments");

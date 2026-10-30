@@ -126,6 +126,45 @@ describe("bot question menu/callbacks", () => {
     mocked.questionReplyMock.mockResolvedValue({ data: true, error: undefined });
   });
 
+  it("does not let a late question delivery replace a newer question", async () => {
+    const api = createApi([200]);
+    let release!: (value: { message_id: number }) => void;
+    vi.mocked(api.sendRichMessage).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve as typeof release;
+        }),
+    );
+    container.questionManager.startQuestions([QUESTION_ONE], "old");
+    const old = showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_TWO], "new");
+    await showCurrentQuestion(api, 123, createDeps());
+    release({ message_id: 100 });
+    await old;
+    expect(container.questionManager.getRequestID()).toBe("new");
+    expect(container.questionManager.getActiveMessageId()).toBe(200);
+    expect(api.deleteMessage).toHaveBeenCalledWith(123, 100);
+  });
+
+  it("does not clear a new question after an old send fails", async () => {
+    const api = createApi([200]);
+    let reject!: (reason: Error) => void;
+    const failed = () =>
+      new Promise<never>((_resolve, fail) => {
+        reject = fail;
+      });
+    vi.mocked(api.sendRichMessage).mockImplementationOnce(failed);
+    vi.mocked(api.sendMessage).mockRejectedValue(new Error("Telegram offline"));
+    container.questionManager.startQuestions([QUESTION_ONE], "old");
+    const old = showCurrentQuestion(api, 123, createDeps());
+    container.questionManager.startQuestions([QUESTION_TWO], "new");
+    await showCurrentQuestion(api, 123, createDeps());
+    reject(new Error("Telegram 502"));
+    await old;
+    expect(container.questionManager.getRequestID()).toBe("new");
+    expect(container.questionManager.getActiveMessageId()).toBe(200);
+  });
+
   it("shows question details and keyboard in one message", async () => {
     const api = createApi([100]);
 
@@ -170,7 +209,9 @@ describe("bot question menu/callbacks", () => {
     const sendRichMessage = vi
       .fn()
       .mockRejectedValueOnce(
-        Object.assign(new Error("Bad Request: RICH_MESSAGE_BLOCK_UNSUPPORTED"), { error_code: 400 }),
+        Object.assign(new Error("Bad Request: RICH_MESSAGE_BLOCK_UNSUPPORTED"), {
+          error_code: 400,
+        }),
       );
     const api = {
       sendMessage,

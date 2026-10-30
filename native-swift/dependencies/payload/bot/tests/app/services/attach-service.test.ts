@@ -131,9 +131,8 @@ describe("attach/service", () => {
   let deps: AppContainer;
 
   beforeEach(async () => {
-    const { __resetStreamThrottleForTests } = await import(
-      "../../../src/bot/streaming/stream-throttle.js"
-    );
+    const { __resetStreamThrottleForTests } =
+      await import("../../../src/bot/streaming/stream-throttle.js");
     __resetStreamThrottleForTests();
     deps = createDeps();
     configureAttachPresentation(createAttachPresentation(deps));
@@ -199,6 +198,87 @@ describe("attach/service", () => {
     mocked.ensureEventSubscriptionMock.mockReset();
     mocked.ensureEventSubscriptionMock.mockResolvedValue(undefined);
     mocked.stopEventListeningMock.mockReset();
+  });
+
+  it("attaches locally while a Telegram pinned update is hung and keeps only the latest presentation", async () => {
+    let release!: () => void;
+    mocked.pinnedGetStateMock.mockReturnValue({ sessionId: null, messageId: null });
+    mocked.pinnedOnSessionChangeMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const presentation = createAttachPresentation(deps);
+    configureAttachPresentation(presentation);
+    const request = {
+      ...deps,
+      bot: createBot(),
+      chatId: 777,
+      session: mocked.currentSession!,
+      ensureEventSubscription: mocked.ensureEventSubscriptionMock,
+    };
+    const result = await attachToSession(request);
+    expect(result.alreadyAttached).toBe(false);
+    expect(deps.attachManager.isAttachedSession("session-1")).toBe(true);
+    await presentation.ensurePinnedSession({
+      api: request.bot.api,
+      chatId: 777,
+      session: request.session,
+    });
+    expect(mocked.pinnedOnSessionChangeMock).toHaveBeenCalledTimes(1);
+    await presentation.ensurePinnedSession({
+      api: request.bot.api,
+      chatId: 777,
+      session: { ...request.session, id: "session-2" },
+    });
+    await presentation.ensurePinnedSession({
+      api: request.bot.api,
+      chatId: 777,
+      session: { ...request.session, id: "session-3" },
+    });
+    await presentation.syncAttachState(true, true);
+    await presentation.syncAttachState(true, false);
+    release();
+    await vi.waitFor(() => expect(mocked.pinnedOnSessionChangeMock).toHaveBeenCalledTimes(2));
+    expect(mocked.pinnedOnSessionChangeMock).toHaveBeenLastCalledWith(
+      "session-3",
+      request.session.title,
+    );
+    expect(mocked.pinnedLoadContextFromHistoryMock).toHaveBeenCalledTimes(1);
+    expect(mocked.pinnedSetAttachStateMock).toHaveBeenLastCalledWith(true, false);
+  });
+
+  it("restores questions without waiting for their Telegram delivery and deduplicates repeated display", async () => {
+    let release!: () => void;
+    mocked.showCurrentQuestionMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    mocked.questionListMock.mockResolvedValue({
+      data: [
+        {
+          id: "req-restore",
+          sessionID: "session-1",
+          questions: [{ header: "Q", question: "Choose", options: [] }],
+        },
+      ],
+      error: null,
+    });
+    const result = await attachToSession({
+      ...deps,
+      bot: createBot(),
+      chatId: 777,
+      session: mocked.currentSession!,
+      ensureEventSubscription: mocked.ensureEventSubscriptionMock,
+    });
+    expect(result.restoredQuestion).toBe(true);
+    expect(deps.questionManager.isActive()).toBe(true);
+    expect(mocked.showCurrentQuestionMock).toHaveBeenCalledOnce();
+    release();
+    await Promise.resolve();
   });
 
   it("follows an idle session and updates attach state", async () => {
@@ -281,27 +361,61 @@ describe("attach/service", () => {
   });
 
   it("restores a detached child permission and attributes it to the followed root", async () => {
-    const request = { id: "permission-child", sessionID: "child", permission: "edit", patterns: ["*"], metadata: {}, always: [] };
+    const request = {
+      id: "permission-child",
+      sessionID: "child",
+      permission: "edit",
+      patterns: ["*"],
+      metadata: {},
+      always: [],
+    };
     mocked.permissionListMock.mockResolvedValue({ data: [request], error: null });
     mocked.sessionGetMock.mockResolvedValue({ data: { parentID: "session-1" }, error: null });
 
     const result = await attachToSession({
-      ...deps, bot: createBot(), chatId: 777, session: mocked.currentSession!,
+      ...deps,
+      bot: createBot(),
+      chatId: 777,
+      session: mocked.currentSession!,
       ensureEventSubscription: mocked.ensureEventSubscriptionMock,
     });
 
     expect(result.restoredPermissions).toBe(1);
     expect(mocked.registerRestoredPermissionChildMock).toHaveBeenCalledWith("child", "session-1");
-    expect(mocked.showPermissionRequestMock).toHaveBeenCalledWith(expect.anything(), 777, request, expect.anything());
+    expect(mocked.showPermissionRequestMock).toHaveBeenCalledWith(
+      expect.anything(),
+      777,
+      request,
+      expect.anything(),
+      expect.any(Number),
+    );
   });
 
   it("queues a child permission behind a restored question", async () => {
-    mocked.questionListMock.mockResolvedValue({ data: [{ id: "question-1", sessionID: "session-1", questions: [] }], error: null });
-    mocked.permissionListMock.mockResolvedValue({ data: [{ id: "permission-child", sessionID: "child", permission: "edit", patterns: ["*"], metadata: {}, always: [] }], error: null });
+    mocked.questionListMock.mockResolvedValue({
+      data: [{ id: "question-1", sessionID: "session-1", questions: [] }],
+      error: null,
+    });
+    mocked.permissionListMock.mockResolvedValue({
+      data: [
+        {
+          id: "permission-child",
+          sessionID: "child",
+          permission: "edit",
+          patterns: ["*"],
+          metadata: {},
+          always: [],
+        },
+      ],
+      error: null,
+    });
     mocked.sessionGetMock.mockResolvedValue({ data: { parentID: "session-1" }, error: null });
 
     await attachToSession({
-      ...deps, bot: createBot(), chatId: 777, session: mocked.currentSession!,
+      ...deps,
+      bot: createBot(),
+      chatId: 777,
+      session: mocked.currentSession!,
       ensureEventSubscription: mocked.ensureEventSubscriptionMock,
     });
 
@@ -484,17 +598,16 @@ describe("attach/service", () => {
   });
 
   it("detaches locally without stopping the directory event listener", async () => {
-    const { noteStreamActivity, getStreamThrottleMs } = await import(
-      "../../../src/bot/streaming/stream-throttle.js"
-    );
+    const { noteStreamActivity, getStreamThrottleMs } =
+      await import("../../../src/bot/streaming/stream-throttle.js");
     container.attachManager.attach("session-1", "D:\\Projects\\Repo");
-    noteStreamActivity("session-1", Date.now() - 10 * 60_000);
-    expect(getStreamThrottleMs("session-1")).toBe(5_000);
+    noteStreamActivity("session-1", Date.now() - 20 * 60_000);
+    expect(getStreamThrottleMs("session-1")).toBe(10_000);
 
     detachAttachedSession("detach_command", deps);
 
     expect(mocked.stopEventListeningMock).not.toHaveBeenCalled();
     expect(container.attachManager.getSnapshot()).toBeNull();
-    expect(getStreamThrottleMs("session-1")).toBe(1_000);
+    expect(getStreamThrottleMs("session-1")).toBe(5_000);
   });
 });

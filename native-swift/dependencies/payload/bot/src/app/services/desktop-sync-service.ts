@@ -1,3 +1,8 @@
+import {
+  ensureProjectDirectory,
+  isProjectDirectoryMissing,
+  ProjectDirectoryMissingError,
+} from "./project-directory-service.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -7,7 +12,11 @@ import type { ModelInfo } from "../types/model.js";
 import { config } from "../../config.js";
 import { getRuntimePaths } from "../../runtime/paths.js";
 import { opencodeClient } from "../../opencode/client.js";
-import { getCurrentProject, setCurrentProject } from "../stores/settings-store.js";
+import {
+  getCurrentProject,
+  getHiddenProjects,
+  setCurrentProject,
+} from "../stores/settings-store.js";
 import { clearSession, getCurrentSession, setCurrentSession } from "./session-service.js";
 import { getStoredModel, selectModel } from "./model-selection-service.js";
 import { applySessionSettings } from "./session-settings-service.js";
@@ -21,6 +30,16 @@ import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 let mobileRevision = 0;
 let mobileOperations = 0;
 let desktopOperation: Promise<void> | undefined;
+let deletedSession: { id: string; at: number } | undefined;
+
+/** The desktop treats sync state older than 6 seconds as disconnected. */
+const STATE_HEARTBEAT_MS = 2000;
+const DELETED_SESSION_TTL_MS = 15_000;
+
+/** Lets an embedded page leave a session that the phone just deleted. */
+export function noteDesktopSessionDeleted(sessionID: string): void {
+  deletedSession = { id: sessionID, at: Date.now() };
+}
 
 /** Phone mutations run after an already admitted desktop attach has finished. */
 export async function waitForDesktopSyncIdle(): Promise<void> {
@@ -104,12 +123,20 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
   const instance = randomUUID();
   let stopped = false;
   let running: Promise<void> | undefined;
+  let writing: Promise<void> = Promise.resolve();
   const acknowledgements: Array<{ id: string; reason: string | null }> = [];
+  let lastStateSnapshot = "";
+  let lastStateWriteAt = 0;
 
   const context = () => ({
     currentProject: getCurrentProject(),
     currentSession: getCurrentSession() ?? undefined,
     currentModel: getStoredModel(),
+    hiddenProjects: getHiddenProjects(),
+    deletedSession:
+      deletedSession && Date.now() - deletedSession.at < DELETED_SESSION_TTL_MS
+        ? deletedSession
+        : undefined,
   });
 
   async function apply(command: DesktopSyncCommand): Promise<void> {
@@ -126,6 +153,7 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
       session = result.data;
     }
     const directory = session?.directory ?? command.directory ?? current?.directory;
+    if (directory) await ensureProjectDirectory(directory);
     const project =
       directory && directory !== getCurrentProject()?.worktree
         ? await getProjectByWorktree(directory)
@@ -209,7 +237,7 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
     sessionID: getCurrentSession()?.id,
   });
 
-  async function tick(): Promise<void> {
+  async function processCommands(): Promise<void> {
     await fs.mkdir(root, { recursive: true });
     const names = (await fs.readdir(root))
       .filter((name) => /^command-[\w-]+\.json$/.test(name))
@@ -229,32 +257,69 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
-        reason = ["mobile", "busy", "stale"].includes(message) ? message : "unavailable";
+        reason =
+          error instanceof ProjectDirectoryMissingError
+            ? "project_missing"
+            : ["mobile", "busy", "stale"].includes(message)
+              ? message
+              : "unavailable";
         logger.warn("[DesktopSync] Could not apply desktop action", { id, reason });
       }
       acknowledgements.push({ id, reason });
       if (acknowledgements.length > 64) acknowledgements.shift();
       await fs.unlink(file);
     }
+  }
+
+  async function writeState(): Promise<void> {
+    await fs.mkdir(root, { recursive: true });
+    const directory = getCurrentSession()?.directory ?? getCurrentProject()?.worktree;
+    const projectUnavailable = directory ? await isProjectDirectoryMissing(directory) : false;
+    const snapshot = JSON.stringify({
+      ...context(),
+      ...state(),
+      projectUnavailable,
+      acknowledgements,
+    });
+    const now = Date.now();
+    // A fresh timestamp lets the desktop detect a stopped/disconnected bot, so the file is
+    // rewritten at the heartbeat even when nothing changed; an idle tick writes nothing.
+    if (snapshot === lastStateSnapshot && now - lastStateWriteAt < STATE_HEARTBEAT_MS) {
+      return;
+    }
+    lastStateSnapshot = snapshot;
+    lastStateWriteAt = now;
     const output = JSON.stringify({
       ...context(),
       ...state(),
       acknowledgements,
-      updatedAt: Date.now(),
+      projectUnavailable,
+      updatedAt: now,
     });
-    // A fresh timestamp lets the desktop detect a stopped/disconnected bot.
     await fs.writeFile(path.join(root, "state.tmp"), output);
     await fs.rename(path.join(root, "state.tmp"), path.join(root, "state.json"));
   }
+  // Only this writer touches state.tmp/state.json, including command-completion writes.
+  const publish = (): Promise<void> => {
+    writing = writing
+      .then(writeState)
+      .catch((error: unknown) => logger.warn("[DesktopSync] State refresh failed", error));
+    return writing;
+  };
   const run = () => {
-    if (stopped || running) return;
-    running = tick()
-      .catch((error: unknown) => logger.warn("[DesktopSync] State refresh failed", error))
-      .finally(() => {
-        running = undefined;
-        desktopOperation = undefined;
-      });
-    desktopOperation = running;
+    if (stopped) return;
+    if (!running) {
+      running = processCommands()
+        .catch((error: unknown) => logger.warn("[DesktopSync] Command processing failed", error))
+        .finally(() => {
+          running = undefined;
+          desktopOperation = undefined;
+          if (!stopped) void publish();
+        });
+      desktopOperation = running;
+    }
+    // A pending command must not stop the heartbeat or receive an early acknowledgement.
+    void publish();
   };
   const timer = setInterval(run, 500);
   timer.unref();
@@ -263,5 +328,6 @@ export function startDesktopSync(container: AppContainer, bot: Bot<Context>): ()
     stopped = true;
     clearInterval(timer);
     await running;
+    await writing;
   };
 }

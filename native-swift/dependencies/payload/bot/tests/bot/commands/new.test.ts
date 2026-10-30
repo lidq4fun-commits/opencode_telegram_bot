@@ -6,12 +6,16 @@ import { createTestAppContainer } from "../../helpers/app-container.js";
 import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
 
 const mocked = vi.hoisted(() => ({
+  directoryMissingMock: vi.fn(),
   sessionCreateMock: vi.fn(),
   getCurrentProjectMock: vi.fn(),
   attachToSessionMock: vi.fn(),
   ensureEventSubscriptionMock: vi.fn(),
 }));
 
+vi.mock("../../../src/app/services/project-directory-service.js", () => ({
+  isProjectDirectoryMissing: mocked.directoryMissingMock,
+}));
 vi.mock("../../../src/opencode/client.js", () => ({
   opencodeClient: {
     session: {
@@ -95,6 +99,17 @@ describe("bot/commands/new", () => {
     });
     mocked.ensureEventSubscriptionMock.mockReset();
     mocked.getCurrentProjectMock.mockReturnValue({ id: "project-1", worktree: "/repo" });
+  });
+
+  it("does not create another broken session for a missing project", async () => {
+    mocked.getCurrentProjectMock.mockReturnValue({ id: "project-1", worktree: "/removed" });
+    mocked.directoryMissingMock.mockResolvedValueOnce(true);
+    const ctx = createContext();
+    await newCommand(ctx as never, createDeps());
+    expect(ctx.reply).toHaveBeenCalledWith(
+      t("bot.project_directory_missing", { directory: "/removed" }),
+    );
+    expect(mocked.sessionCreateMock).not.toHaveBeenCalled();
   });
 
   it("blocks new session creation while foreground session is busy", async () => {

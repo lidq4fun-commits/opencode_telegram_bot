@@ -26,6 +26,9 @@ import {
   formatModelDisplayName,
 } from "./pinned-message-format.js";
 import { getSessionStreamThrottleMs } from "../streaming/stream-throttle.js";
+import { withTelegramDeliveryPriority } from "../telegram-send-scheduler.js";
+
+const PINNED_UPDATE_INTERVAL_MS = 15_000;
 
 export class PinnedMessageManager {
   private api: Api | null = null;
@@ -418,10 +421,13 @@ export class PinnedMessageManager {
 
   private scheduleDebouncedUpdate(): void {
     if (this.updateDebounceTimer) {
-      clearTimeout(this.updateDebounceTimer);
+      return;
     }
 
-    const delayMs = getSessionStreamThrottleMs(this.state.sessionId ?? "");
+    const delayMs = Math.max(
+      PINNED_UPDATE_INTERVAL_MS,
+      getSessionStreamThrottleMs(this.state.sessionId ?? ""),
+    );
     this.updateDebounceTimer = setTimeout(() => {
       this.updateDebounceTimer = null;
       void this.updatePinnedMessage();
@@ -1030,6 +1036,16 @@ export class PinnedMessageManager {
       return;
     }
 
+    if (!forceUpdate && this.state.attachBusy &&
+      Date.now() - this.state.lastUpdated < PINNED_UPDATE_INTERVAL_MS) {
+      this.scheduleDebouncedUpdate();
+      return;
+    }
+    if (this.updateDebounceTimer) {
+      clearTimeout(this.updateDebounceTimer);
+      this.updateDebounceTimer = null;
+    }
+
     this.pendingUpdate = true;
     if (forceUpdate) {
       this.pendingForceUpdate = true;
@@ -1065,7 +1081,9 @@ export class PinnedMessageManager {
       }
 
       try {
-        await this.api.editMessageText(this.chatId, this.state.messageId, text);
+        await withTelegramDeliveryPriority("progress", () =>
+          this.api!.editMessageText(this.chatId!, this.state.messageId!, text),
+        );
         this.state.lastUpdated = Date.now();
         this.lastRenderedMessageText = text;
 

@@ -13,9 +13,15 @@ export type OpenCommandDeps = Pick<
   "attachManager" | "foregroundSessionState" | "interactionManager"
 >;
 
+export interface OpenCommandOptions {
+  /** Browse folders to create a new project folder inside the selected one. */
+  createProject?: boolean;
+}
+
 export async function openCommand(
   ctx: CommandContext<Context>,
   deps: OpenCommandDeps,
+  options: OpenCommandOptions = {},
 ): Promise<void> {
   try {
     if (isForegroundBusy(deps)) {
@@ -31,12 +37,14 @@ export async function openCommand(
     clearOpenPathIndex();
 
     const roots = getBrowserRoots();
+    const selectLabel = options.createProject ? t("create_project.select_here") : undefined;
+    const cancelLabel = options.createProject ? t("create_project.cancel_browse") : undefined;
     let text: string;
     let keyboard;
 
     const singleRoot = roots[0];
     if (roots.length === 1 && singleRoot) {
-      const view = await renderOpenBrowseView(singleRoot);
+      const view = await renderOpenBrowseView(singleRoot, 0, selectLabel, cancelLabel);
       if ("error" in view) {
         await ctx.reply(t("open.scan_error", { error: view.error }));
         return;
@@ -45,7 +53,7 @@ export async function openCommand(
       keyboard = view.keyboard;
     } else {
       text = t("open.select_root");
-      keyboard = buildOpenRootsKeyboard();
+      keyboard = buildOpenRootsKeyboard(cancelLabel);
     }
 
     const message = await ctx.reply(text, { reply_markup: keyboard });
@@ -56,6 +64,7 @@ export async function openCommand(
       metadata: {
         menuKind: "open",
         messageId: message.message_id,
+        createProject: options.createProject === true,
       },
     });
   } catch (error) {

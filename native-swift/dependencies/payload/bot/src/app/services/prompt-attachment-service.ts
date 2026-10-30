@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { FilePartInput } from "@opencode-ai/sdk/v2";
+import type { FilePartInput } from "../../opencode/types.js";
 import { config } from "../../config.js";
 import { promptAttachment } from "../managers/prompt-attachment-manager.js";
 import { logger } from "../../utils/logger.js";

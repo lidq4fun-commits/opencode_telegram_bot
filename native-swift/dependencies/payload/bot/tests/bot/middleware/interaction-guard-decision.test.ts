@@ -254,6 +254,38 @@ describe("interaction guard", () => {
     expect(decision.state?.kind).toBe("rename");
   });
 
+  it("allows create-project cancel callback while the folder prompt expects text", () => {
+    startInteractionForTest(deps.interactionManager, {
+      kind: "custom",
+      expectedInput: "text",
+      metadata: { flow: "create_project" },
+    });
+
+    const decision = resolveInteractionGuardDecision(
+      createContext({ callbackData: "create_project:cancel" }),
+      deps,
+    );
+
+    expect(decision.allow).toBe(true);
+    expect(decision.inputType).toBe("callback");
+  });
+
+  it("blocks other callbacks while the create-project folder prompt expects text", () => {
+    startInteractionForTest(deps.interactionManager, {
+      kind: "custom",
+      expectedInput: "text",
+      metadata: { flow: "create_project" },
+    });
+
+    const decision = resolveInteractionGuardDecision(
+      createContext({ callbackData: "open:roots" }),
+      deps,
+    );
+
+    expect(decision.allow).toBe(false);
+    expect(decision.reason).toBe("expected_text");
+  });
+
   it("blocks non-rename callback while rename expects text", () => {
     startInteractionForTest(deps.interactionManager, {
       kind: "rename",

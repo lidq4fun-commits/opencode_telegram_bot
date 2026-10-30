@@ -216,12 +216,11 @@ describe("bot/handlers/prompt-queue-dispatch on OpenCode V2", () => {
     expect(mocked.startInboxPromptRun).toHaveBeenCalledWith(SESSION, DEPS, undefined);
   });
 
-  it("bounds an upload before downloading even when OpenCode stores the payload", async () => {
-    await expect(rejectQueuedMediaBeforePreparation(makeContext(), undefined)).resolves.toBe(true);
+  it("does not apply the queued media cap to prompts that wait in OpenCode", async () => {
+    await expect(rejectQueuedMediaBeforePreparation(makeContext(), undefined)).resolves.toBe(false);
     await expect(rejectQueuedMediaBeforePreparation(makeContext(), 50 * 1024 * 1024)).resolves.toBe(
-      true,
+      false,
     );
-    await expect(rejectQueuedMediaBeforePreparation(makeContext(), 512)).resolves.toBe(false);
   });
 
   it("still refuses media before preparation when the queue is full", async () => {

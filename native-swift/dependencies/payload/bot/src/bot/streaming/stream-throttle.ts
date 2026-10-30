@@ -1,11 +1,9 @@
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
 
-export const STREAM_THROTTLE_BASE_MS = SECOND_MS;
+export const STREAM_THROTTLE_BASE_MS = 5 * SECOND_MS;
 export const STREAM_THROTTLE_MAX_MS = 10 * SECOND_MS;
 
-const TIER_TWO_AFTER_MS = MINUTE_MS;
-const TIER_FIVE_AFTER_MS = 5 * MINUTE_MS;
 const TIER_TEN_AFTER_MS = 15 * MINUTE_MS;
 
 export type StreamThrottleMs = number | ((sessionId: string) => number);
@@ -13,16 +11,8 @@ export type StreamThrottleMs = number | ((sessionId: string) => number);
 const startedAtBySession = new Map<string, number>();
 
 export function resolveProgressiveThrottleMs(elapsedMs: number): number {
-  if (elapsedMs < TIER_TWO_AFTER_MS) {
-    return STREAM_THROTTLE_BASE_MS;
-  }
-
-  if (elapsedMs < TIER_FIVE_AFTER_MS) {
-    return 2 * SECOND_MS;
-  }
-
   if (elapsedMs < TIER_TEN_AFTER_MS) {
-    return 5 * SECOND_MS;
+    return STREAM_THROTTLE_BASE_MS;
   }
 
   return STREAM_THROTTLE_MAX_MS;

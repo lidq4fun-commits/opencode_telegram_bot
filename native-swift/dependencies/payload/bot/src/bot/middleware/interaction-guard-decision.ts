@@ -161,6 +161,31 @@ function isAllowedTaskCallback(ctx: Context, state: InteractionState): boolean {
   );
 }
 
+function isAllowedCreateProjectCancelCallback(ctx: Context, state: InteractionState): boolean {
+  return (
+    state.kind === "custom" &&
+    state.metadata.flow === "create_project" &&
+    ctx.callbackQuery?.data === "create_project:cancel"
+  );
+}
+
+function isAllowedConnectCancelCallback(ctx: Context, state: InteractionState): boolean {
+  const data = ctx.callbackQuery?.data ?? "";
+  if (state.kind !== "custom") {
+    return false;
+  }
+
+  if (state.metadata.flow === "provider_connect_code") {
+    return data.startsWith("connect:cancel:");
+  }
+
+  return (
+    (state.metadata.flow === "provider_connect_key" ||
+      state.metadata.flow === "provider_connect_search") &&
+    data === "connect:cancel_input"
+  );
+}
+
 export function resolveInteractionGuardDecision(
   ctx: Context,
   deps: InteractionGuardDecisionDeps,
@@ -248,6 +273,14 @@ export function resolveInteractionGuardDecision(
   }
 
   if (inputType === "callback" && isAllowedTaskCallback(ctx, state)) {
+    return createAllowDecision(inputType, state, command);
+  }
+
+  if (inputType === "callback" && isAllowedCreateProjectCancelCallback(ctx, state)) {
+    return createAllowDecision(inputType, state, command);
+  }
+
+  if (inputType === "callback" && isAllowedConnectCancelCallback(ctx, state)) {
     return createAllowDecision(inputType, state, command);
   }
 

@@ -28,6 +28,12 @@ git init -q "$STAGE/git-repo"
 git -C "$STAGE/git-repo" -c user.name=PackagingTest -c user.email=packaging@example.invalid commit --allow-empty -q -m 'Isolated packaging smoke test'
 git -C "$STAGE/git-repo" log -1 --format=%s
 [[ -f "$APP/Contents/Resources/EmbeddedWebSync.js" ]]
+# Guard macOS-specific behavior that a shared-source rebuild can overwrite.
+grep -q 'compactOutputMode ?? true' "$RES/bot/dist/app/stores/settings-store.js"
+grep -q 'routeURL' "$APP/Contents/Resources/EmbeddedWebSync.js"
+grep -q 'auth_token' "$APP/Contents/Resources/EmbeddedWebSync.js"
+grep -q 'isDirectoryWritable' "$RES/bot/dist/bot/callbacks/file-browser-callback-handler.js"
+grep -q 'create_project.permission_denied' "$RES/bot/dist/i18n/zh.js"
 for license in Node-LICENSE.txt Bun-LICENSE.md OpenCode-LICENSE.txt Git-COPYING.txt; do [[ -f "$RES/dependencies/licenses/$license" ]]; done
 [[ -f "$RES/dependencies/git-source/git-2.56.0.tar.xz" ]]
 echo 'Packaged runtime smoke checks passed. No real Bot was started or model request sent.'

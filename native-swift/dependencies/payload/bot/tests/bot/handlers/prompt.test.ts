@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Context } from "grammy";
-import type { FilePartInput } from "@opencode-ai/sdk/v2";
+import type { FilePartInput } from "../../../src/opencode/types.js";
 import {
   admitPromptToInbox,
   consumePromptResponseMode,
@@ -16,6 +16,7 @@ import { createTestAppContainer } from "../../helpers/app-container.js";
 import { defined } from "../../helpers/defined.js";
 
 const mocked = vi.hoisted(() => ({
+  directoryMissingMock: vi.fn().mockResolvedValue(false),
   resolvePendingAttachmentMock: vi.fn(),
   interactionClearMock: vi.fn(),
   editMessageReplyMarkupMock: vi.fn(),
@@ -29,7 +30,6 @@ const mocked = vi.hoisted(() => ({
   sessionPromptMock: vi.fn(),
   sessionPromptAsyncMock: vi.fn(),
   sessionCreateMock: vi.fn(),
-  providerConnectionStatusMock: vi.fn(),
   suppressionRegisterMock: vi.fn(),
   safeBackgroundTaskMock: vi.fn(),
   setSessionSummaryMock: vi.fn(),
@@ -38,11 +38,11 @@ const mocked = vi.hoisted(() => ({
   getTtsModeMock: vi.fn(),
 }));
 
+vi.mock("../../../src/app/services/project-directory-service.js", () => ({
+  isProjectDirectoryMissing: mocked.directoryMissingMock,
+}));
+
 vi.mock("../../../src/opencode/client.js", () => ({
-  opencodeV2Client: {
-    provider: { connectionStatus: mocked.providerConnectionStatusMock },
-    session: { promptAsync: mocked.sessionPromptAsyncMock },
-  },
   opencodeClient: {
     session: {
       status: mocked.sessionStatusMock,
@@ -193,6 +193,7 @@ beforeEach(() => {
 
 describe("bot/handlers/prompt", () => {
   beforeEach(() => {
+    mocked.directoryMissingMock.mockResolvedValue(false);
     container.attachManager.attach("session-1", "D:\\Projects\\Repo");
     mocked.currentProject = { id: "project-1", worktree: "D:\\Projects\\Repo" };
     mocked.currentSession = {
@@ -203,7 +204,6 @@ describe("bot/handlers/prompt", () => {
     mocked.sessionStatusMock.mockReset();
     mocked.sessionPromptMock.mockReset();
     mocked.sessionPromptAsyncMock.mockReset();
-    mocked.providerConnectionStatusMock.mockReset().mockResolvedValue({ data: "ready" });
     mocked.sessionCreateMock.mockReset();
     mocked.suppressionRegisterMock.mockReset();
     mocked.safeBackgroundTaskMock.mockReset();
@@ -231,6 +231,23 @@ describe("bot/handlers/prompt", () => {
     mocked.resolvePendingAttachmentMock.mockResolvedValue(null);
     mocked.editMessageReplyMarkupMock.mockReset();
     mocked.editMessageReplyMarkupMock.mockResolvedValue(undefined);
+  });
+
+  it("blocks a missing project before attaching or dispatching a prompt", async () => {
+    mocked.directoryMissingMock.mockResolvedValue(true);
+    const ctx = createContext();
+    const result = await processIncomingPrompt(
+      ctx,
+      createIncomingPrompt("hello"),
+      createDeps(),
+    );
+    expect(result).toBe(false);
+    expect(ctx.reply).toHaveBeenCalledWith(
+      t("bot.project_directory_missing", { directory: mocked.currentProject.worktree }),
+    );
+    expect(mocked.attachToSessionMock).not.toHaveBeenCalled();
+    expect(mocked.sessionCreateMock).not.toHaveBeenCalled();
+    expect(mocked.safeBackgroundTaskMock).not.toHaveBeenCalled();
   });
 
   it("registers suppression entry for text prompts", async () => {
@@ -281,6 +298,29 @@ describe("bot/handlers/prompt", () => {
     );
   });
 
+  it("submits a new session prompt even when session notices are flood limited", async () => {
+    mocked.currentSession = null;
+    mocked.sessionCreateMock.mockResolvedValueOnce({
+      data: { id: "session-2", title: "" },
+      error: null,
+    });
+    const ctx = createContext();
+    vi.mocked(ctx.reply).mockRejectedValue(
+      Object.assign(new Error("Too Many Requests"), {
+        error_code: 429,
+        parameters: { retry_after: 3499 },
+      }),
+    );
+    const deps = createDeps();
+    deps.keyboardManager.getContextInfo = vi.fn(() => null);
+
+    await expect(processUserPrompt(ctx, "Review README", deps)).resolves.toBe(true);
+    await getScheduledBackgroundTask().task();
+    expect(mocked.sessionPromptAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: "session-2" }),
+    );
+  });
+
   it("starts prompts through promptAsync instead of the streaming prompt endpoint", async () => {
     const handled = await processUserPrompt(createContext(), "Review README", createDeps());
 
@@ -318,34 +358,6 @@ describe("bot/handlers/prompt", () => {
       777,
       "Failed to send request to OpenCode.",
     );
-  });
-
-  it("reminds an unauthenticated user to use web /connect without sending a prompt", async () => {
-    mocked.providerConnectionStatusMock.mockResolvedValue({ data: "needs_auth" });
-    const ctx = createContext();
-    expect(await processUserPrompt(ctx, "Review README", createDeps())).toBe(false);
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("/connect"));
-    expect(mocked.safeBackgroundTaskMock).not.toHaveBeenCalled();
-  });
-
-  it("allows retry immediately after the provider is connected", async () => {
-    mocked.providerConnectionStatusMock
-      .mockResolvedValueOnce({ data: "needs_auth" })
-      .mockResolvedValueOnce({ data: "ready" });
-    const ctx = createContext();
-    const deps = createDeps();
-    expect(await processUserPrompt(ctx, "Review README", deps)).toBe(false);
-    expect(await processUserPrompt(ctx, "Review README", deps)).toBe(true);
-  });
-
-  it("sends login guidance when credentials expire after prompt admission", async () => {
-    const ctx = createContext();
-    const deps = createDeps();
-    await processUserPrompt(ctx, "Review README", deps);
-    getScheduledBackgroundTask().onSuccess?.({
-      error: { name: "ProviderAuthError", data: { message: "API key missing" } },
-    });
-    expect(deps.bot.api.sendMessage).toHaveBeenCalledWith(777, expect.stringContaining("/connect"));
   });
 
   it("still notifies the user when promptAsync rejects before the run starts", async () => {

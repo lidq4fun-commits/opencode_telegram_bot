@@ -25,6 +25,17 @@ function signature(part: TelegramRenderedPart) {
 }
 
 describe("bot/streaming/response-streamer", () => {
+  it("releases a long flood wait so completion cannot hold a question for minutes", async () => {
+    vi.useFakeTimers();
+    const sendPart = vi.fn().mockRejectedValue(new Error("429: retry after 3499"));
+    const streamer = new ResponseStreamer({ throttleMs: 0, sendPart, editPart: vi.fn(), deleteText: vi.fn() });
+    streamer.enqueue("s1", "m1", { parts: [plainPart("working")] });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(streamer.complete("s1", "m1")).resolves.toMatchObject({ streamed: false });
+    expect(sendPart).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

@@ -1,4 +1,4 @@
-import type { McpStatus } from "@opencode-ai/sdk/v2";
+import type { McpStatus } from "../../opencode/types.js";
 import { opencodeClient } from "../../opencode/client.js";
 import { logger } from "../../utils/logger.js";
 import { isRecord } from "../../utils/type-guards.js";

@@ -2,6 +2,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CompactProgressStreamer } from "../../../src/bot/streaming/compact-progress-streamer.js";
 
 describe("bot/streaming/compact-progress-streamer", () => {
+  it("merges rapid progress and skips unchanged edits while retaining the final summary", async () => {
+    vi.useFakeTimers();
+    const sendText = vi.fn().mockResolvedValue(10);
+    const editText = vi.fn().mockResolvedValue(undefined);
+    const streamer = new CompactProgressStreamer({ throttleMs: 5000, sendText, editText });
+    for (let index = 0; index < 100; index++) streamer.updateActivity("s1", `step ${index}`);
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(sendText).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendText).toHaveBeenCalledExactlyOnceWith("s1", "⏳ Working\nstep 99");
+    streamer.updateActivity("s1", "step 99");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(editText).not.toHaveBeenCalled();
+    await streamer.finalize("s1");
+    expect(editText).toHaveBeenCalledTimes(1);
+    expect(editText.mock.calls[0]?.[2]).toContain("Finished Work");
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

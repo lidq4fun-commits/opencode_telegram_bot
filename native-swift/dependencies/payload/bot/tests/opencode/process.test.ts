@@ -234,7 +234,7 @@ describe("opencode/process", () => {
 
   it("maps OpenCode releases to their API version", () => {
     expect(getOpencodeApiVersion("2.0.16")).toBe("v2");
-    expect(getOpencodeApiVersion("1.18.32")).toBeNull();
-    expect(getOpencodeApiVersion("0.15.0")).toBeNull();
+    expect(getOpencodeApiVersion("1.18.32")).toBe("v1");
+    expect(getOpencodeApiVersion("0.15.0")).toBe("v1");
   });
 });

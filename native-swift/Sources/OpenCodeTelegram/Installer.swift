@@ -45,8 +45,10 @@ import SwiftUI
                 try await Self.copyApplication(source, to: target) { fraction in
                     Task { @MainActor in self.progress = fraction }
                 }
+                try EngineShellPath.sync(Runtime.dependencyRoot(for: target).appendingPathComponent("dependencies/tg/tg"),
+                    begin: "# >>> OpenCodeTelegram bundled tools >>>", end: "# <<< OpenCodeTelegram bundled tools <<<")
                 installed = target; progress = 1; completed = true
-                message = text("安装完成。", "Installation complete.")
+                message = text("安装完成，tg 已加入 PATH；请新开终端使用。", "Installation complete. tg was added to PATH; open a new terminal to use it.")
             } catch { message = text("安装失败：", "Installation failed: ") + error.localizedDescription }
         }
     }
@@ -72,7 +74,7 @@ import SwiftUI
                 guard dependencySource.resolvingSymlinksInPath() != dependencyTarget.resolvingSymlinksInPath() else {
                     throw AppFailure.message("Choose a different installation directory.")
                 }
-                for required in ["runtime/bin/node", "bot/dist/cli.js", "dependencies/opencode/v2/opencode"] {
+                for required in ["runtime/bin/node", "bot/dist/cli.js", "dependencies/opencode/v2/opencode", "dependencies/tg/tg"] {
                     guard fm.fileExists(atPath: dependencySource.appendingPathComponent(required).path) else {
                         throw AppFailure.message("Offline dependency missing: \(required)")
                     }
@@ -139,6 +141,7 @@ struct InstallerView: View {
             Picker("语言 / Language", selection: $installer.english) { Text("简体中文").tag(false); Text("English").tag(true) }.frame(width: 280).disabled(installer.working || installer.completed)
             Text(installer.completed ? installer.text("安装完成", "Installation complete") : "opencode_telegram_bot").font(.system(size: 28, weight: .semibold))
             Text(installer.text("OpenCode 安装与启动器 · Telegram 远程控制 · 加密通信", "OpenCode installer and launcher · Telegram remote control · encrypted communications"))
+            Text(installer.text("附带 tg v0.11.0，并写入 zsh PATH；不自动登录 Telegram。", "Includes tg v0.11.0 and adds it to zsh PATH; no automatic Telegram login.")).font(.caption)
             if !installer.completed {
                 Text(installer.text("安装位置", "Install location"))
                 HStack {

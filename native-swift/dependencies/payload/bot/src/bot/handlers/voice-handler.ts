@@ -16,6 +16,7 @@ import { createIncomingPrompt, type IncomingPrompt } from "../../app/types/promp
 import { flushPendingPrompt } from "./message-merger.js";
 import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
+import { takeDecryptedEot10Media } from "../../../EOT10Crypto.mjs";
 import { buildTelegramFileUrl } from "../../app/services/file-download-service.js";
 import { buildQuotedNotification } from "../../app/services/quoted-notification.js";
 import { editBotText } from "../messages/telegram-text.js";
@@ -129,6 +130,11 @@ async function downloadTelegramFile(
   fileId: string,
 ): Promise<{ buffer: Buffer; filename: string } | null> {
   try {
+    const cachedMedia = takeDecryptedEot10Media(fileId);
+    if (cachedMedia) {
+      return { buffer: cachedMedia.buffer, filename: "audio.ogg" };
+    }
+
     const file = await ctx.api.getFile(fileId);
 
     if (!file.file_path) {

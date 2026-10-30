@@ -4,19 +4,15 @@ import type { Context } from "grammy";
 const flushPendingPromptMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
-  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "photo-inbox" })),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
 }));
-import { admitPromptToInbox } from "../../../src/bot/handlers/prompt.js";
 
 vi.mock("../../../src/bot/handlers/message-merger.js", () => ({
   flushPendingPrompt: flushPendingPromptMock,
   __resetMessageMergerForTests: vi.fn(),
 }));
 
-import {
-  handlePhotoMessage,
-  type PhotoHandlerDeps,
-} from "../../../src/bot/handlers/photo-handler.js";
+import { handlePhotoMessage, type PhotoHandlerDeps } from "../../../src/bot/handlers/photo-handler.js";
 import { createIncomingPrompt } from "../../../src/app/types/prompt.js";
 import { promptQueue } from "../../../src/app/managers/prompt-queue-manager.js";
 import * as settingsStore from "../../../src/app/stores/settings-store.js";
@@ -24,10 +20,7 @@ import { initializePromptQueueDispatch } from "../../../src/bot/handlers/prompt-
 import { createTestAppContainer } from "../../helpers/app-container.js";
 import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
 
-function createPhotoContext(caption = "Describe this"): {
-  ctx: Context;
-  replyMock: ReturnType<typeof vi.fn>;
-} {
+function createPhotoContext(caption = "Describe this"): { ctx: Context; replyMock: ReturnType<typeof vi.fn> } {
   const replyMock = vi.fn().mockResolvedValue({ message_id: 100 });
   const ctx = {
     chat: { id: 777 },
@@ -35,13 +28,7 @@ function createPhotoContext(caption = "Describe this"): {
       caption,
       photo: [
         { file_id: "small-photo", file_unique_id: "small", width: 320, height: 240 },
-        {
-          file_id: "large-photo",
-          file_unique_id: "large",
-          width: 1280,
-          height: 960,
-          file_size: 512,
-        },
+        { file_id: "large-photo", file_unique_id: "large", width: 1280, height: 960, file_size: 512 },
       ],
     },
     reply: replyMock,
@@ -91,7 +78,7 @@ describe("bot/handlers/photo-handler", () => {
     promptQueue.__resetForTests();
   });
 
-  it("passes a busy photo to the server inbox pipeline without retaining its bytes", async () => {
+  it("mirrors a busy photo prompt in the V2 inbox", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const { ctx } = createPhotoContext("release screenshot");
@@ -100,18 +87,11 @@ describe("bot/handlers/photo-handler", () => {
     await handlePhotoMessage(ctx, deps);
 
     expect(processPromptMock).not.toHaveBeenCalled();
-    expect(admitPromptToInbox).toHaveBeenCalledWith(
-      ctx,
-      expect.objectContaining({
-        text: "release screenshot",
-        photos: [expect.objectContaining({ filename: "photo.jpg", fileId: "large-photo" })],
-        mediaBytes: 512,
-      }),
-      deps,
-      "queue",
-    );
     expect(promptQueue.list()).toEqual([
-      expect.objectContaining({ displayText: "release screenshot", mediaBytes: 0 }),
+      expect.objectContaining({
+        displayText: "release screenshot",
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
+      }),
     ]);
   });
 

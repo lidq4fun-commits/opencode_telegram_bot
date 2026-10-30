@@ -1,4 +1,4 @@
-import type { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "../../../src/opencode/types.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BackgroundSessionTracker } from "../../../src/app/managers/background-session-manager.js";
 

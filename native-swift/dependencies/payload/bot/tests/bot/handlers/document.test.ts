@@ -7,9 +7,8 @@ import path from "node:path";
 const flushPendingPromptMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
-  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "document-inbox" })),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
 }));
-import { admitPromptToInbox } from "../../../src/bot/handlers/prompt.js";
 
 vi.mock("../../../src/bot/handlers/message-merger.js", () => ({
   flushPendingPrompt: flushPendingPromptMock,
@@ -22,14 +21,43 @@ import {
 } from "../../../src/bot/handlers/document-handler.js";
 
 import { t } from "../../../src/i18n/index.js";
-import {
-  MAX_QUEUED_MEDIA_BYTES,
-  promptQueue,
-} from "../../../src/app/managers/prompt-queue-manager.js";
+import { MAX_QUEUED_MEDIA_BYTES, promptQueue } from "../../../src/app/managers/prompt-queue-manager.js";
 import * as settingsStore from "../../../src/app/stores/settings-store.js";
 import { initializePromptQueueDispatch } from "../../../src/bot/handlers/prompt-queue-dispatch.js";
 import { createTestAppContainer } from "../../helpers/app-container.js";
 import type { AppContainer } from "../../../src/app/bootstrap/app-container.js";
+
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/** A minimal stored DOCX (one word/document.xml entry) for the extraction path. */
+function makeDocxBuffer(text: string): Buffer {
+  const nameBytes = Buffer.from("word/document.xml", "utf8");
+  const xml = Buffer.from(
+    `<w:document><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
+    "utf8",
+  );
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(xml.length, 18);
+  local.writeUInt32LE(xml.length, 22);
+  local.writeUInt16LE(nameBytes.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(xml.length, 20);
+  central.writeUInt32LE(xml.length, 24);
+  central.writeUInt16LE(nameBytes.length, 28);
+  const centralOffset = local.length + nameBytes.length + xml.length;
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(central.length + nameBytes.length, 12);
+  eocd.writeUInt32LE(centralOffset, 16);
+  return Buffer.concat([local, nameBytes, xml, central, nameBytes, eocd]);
+}
 
 function createDocumentContext(overrides: Partial<Context["message"]> = {}): {
   ctx: Context;
@@ -102,7 +130,7 @@ describe("bot/handlers/document", () => {
     promptQueue.__resetForTests();
   });
 
-  it("rejects oversized queued documents before downloading", async () => {
+  it("does not apply the removed local V1 media cap to V2 documents", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const { ctx } = createDocumentContext({
@@ -118,12 +146,12 @@ describe("bot/handlers/document", () => {
 
     await handleDocumentMessage(ctx, deps);
 
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(downloadMock).toHaveBeenCalledOnce();
     expect(processPromptMock).not.toHaveBeenCalled();
     expect(promptQueue.mediaSize()).toBe(0);
   });
 
-  it("rejects queued documents with an unknown media size", async () => {
+  it("prepares V2 inbox documents with an unknown source size", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const { ctx } = createDocumentContext({
@@ -138,12 +166,12 @@ describe("bot/handlers/document", () => {
 
     await handleDocumentMessage(ctx, deps);
 
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(downloadMock).toHaveBeenCalledOnce();
     expect(promptQueue.mediaSize()).toBe(0);
   });
 
   describe("text files", () => {
-    it("passes source bytes to the inbox without retaining them in the mirror", async () => {
+    it("keeps only an inbox mirror when a text file is queued", async () => {
       vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
       container.foregroundSessionState.markBusy("session-1", "/repo");
       const { ctx } = createDocumentContext();
@@ -153,13 +181,11 @@ describe("bot/handlers/document", () => {
 
       expect(downloadMock).toHaveBeenCalledOnce();
       expect(processPromptMock).not.toHaveBeenCalled();
-      expect(admitPromptToInbox).toHaveBeenCalledWith(
-        ctx,
-        expect.objectContaining({ mediaBytes: 1024 }),
-        deps,
-        "queue",
-      );
-      expect(promptQueue.list()).toEqual([expect.objectContaining({ mediaBytes: 0 })]);
+      expect(promptQueue.list()).toEqual([
+        expect.objectContaining({
+          inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
+        }),
+      ]);
       expect(promptQueue.mediaSize()).toBe(0);
     });
 
@@ -190,6 +216,108 @@ describe("bot/handlers/document", () => {
         expect.stringContaining("Please review this file"),
         deps,
       );
+    });
+
+    it("stores a DOCX in the project and points the prompt at it", async () => {
+      const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "docx-upload-"));
+      const docx = makeDocxBuffer("项目周报内容");
+      const projectSpy = vi
+        .spyOn(settingsStore, "getCurrentProject")
+        .mockReturnValue({ worktree } as ReturnType<typeof settingsStore.getCurrentProject>);
+      const { ctx } = createDocumentContext({
+        document: {
+          file_id: "docx-file-id",
+          file_unique_id: "docx-unique",
+          file_name: "report.docx",
+          mime_type: DOCX_MIME,
+          file_size: docx.length,
+        },
+      });
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({ buffer: docx, filePath: "documents/report.docx" }),
+      });
+
+      await handleDocumentMessage(ctx, deps);
+
+      expect(processPromptMock).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining("Read this file with your tools before answering"),
+        deps,
+      );
+      expect(processPromptMock.mock.calls[0]?.[1]).toContain(".opencode-telegram-attachments/");
+      expect(processPromptMock.mock.calls[0]).toHaveLength(3);
+
+      const storedDir = path.join(worktree, ".opencode-telegram-attachments");
+      const stored = await fs.readdir(storedDir);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toContain("report.docx");
+      expect((await fs.readFile(path.join(storedDir, stored[0]!))).equals(docx)).toBe(true);
+      projectSpy.mockRestore();
+      await fs.rm(worktree, { recursive: true, force: true });
+    });
+
+    it("stores an EPUB in the project and points the prompt at it", async () => {
+      const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "epub-upload-"));
+      const epub = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x01, 0x02]);
+      const projectSpy = vi
+        .spyOn(settingsStore, "getCurrentProject")
+        .mockReturnValue({ worktree } as ReturnType<typeof settingsStore.getCurrentProject>);
+      const { ctx } = createDocumentContext({
+        document: {
+          file_id: "epub-file-id",
+          file_unique_id: "epub-unique",
+          file_name: "document123456.epub",
+          mime_type: "application/epub+zip",
+          file_size: epub.length,
+        },
+      });
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({
+          buffer: epub,
+          filePath: "documents/document123456.epub",
+        }),
+      });
+
+      await handleDocumentMessage(ctx, deps);
+
+      expect(processPromptMock).toHaveBeenCalledWith(
+        ctx,
+        expect.stringContaining("Read this file with your tools before answering"),
+        deps,
+      );
+      expect(processPromptMock.mock.calls[0]?.[1]).toContain(".opencode-telegram-attachments/");
+      expect(processPromptMock.mock.calls[0]).toHaveLength(3);
+
+      const storedDir = path.join(worktree, ".opencode-telegram-attachments");
+      const stored = await fs.readdir(storedDir);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toContain("document123456.epub");
+      expect((await fs.readFile(path.join(storedDir, stored[0]!))).equals(epub)).toBe(true);
+      projectSpy.mockRestore();
+      await fs.rm(worktree, { recursive: true, force: true });
+    });
+
+    it("sends a DOCX as a file part when no project is active", async () => {
+      const projectSpy = vi.spyOn(settingsStore, "getCurrentProject").mockReturnValue(undefined);
+      const docx = makeDocxBuffer("no project");
+      const { ctx } = createDocumentContext({
+        document: {
+          file_id: "docx-file-id",
+          file_unique_id: "docx-unique",
+          file_name: "report.docx",
+          mime_type: DOCX_MIME,
+          file_size: docx.length,
+        },
+      });
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({ buffer: docx, filePath: "documents/report.docx" }),
+      });
+
+      await handleDocumentMessage(ctx, deps);
+
+      const fileParts = processPromptMock.mock.calls[0]?.[3] as Array<{ mime: string }> | undefined;
+      expect(fileParts).toEqual([expect.objectContaining({ type: "file", mime: DOCX_MIME })]);
+      projectSpy.mockRestore();
     });
 
     it("accepts application/json as text file", async () => {
@@ -268,30 +396,41 @@ describe("bot/handlers/document", () => {
   });
 
   describe("recognized binary types", () => {
-    it("sends a PDF as a file part without model capability gating", async () => {
-      const { ctx, replyMock } = createDocumentContext({
+    it("stores a PDF in the project and points the prompt at it", async () => {
+      const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-upload-"));
+      const pdf = Buffer.from("%PDF-1.7\n");
+      const projectSpy = vi
+        .spyOn(settingsStore, "getCurrentProject")
+        .mockReturnValue({ worktree } as ReturnType<typeof settingsStore.getCurrentProject>);
+      const { ctx } = createDocumentContext({
         document: {
           file_id: "pdf-file-id",
           file_unique_id: "pdf-unique-id",
           file_name: "document.pdf",
           mime_type: "application/pdf",
-          file_size: 5000,
+          file_size: pdf.length,
         },
       });
-      const { deps, processPromptMock, downloadMock } = createDocumentDeps();
+      const { deps, processPromptMock } = createDocumentDeps({
+        downloadFile: vi.fn().mockResolvedValue({ buffer: pdf, filePath: "documents/document.pdf" }),
+      });
 
       await handleDocumentMessage(ctx, deps);
 
-      expect(replyMock).toHaveBeenCalledWith(t("bot.file_downloading"));
-      expect(downloadMock).toHaveBeenCalled();
       expect(processPromptMock).toHaveBeenCalledWith(
         ctx,
-        "",
+        expect.stringContaining("Read this file with your tools before answering"),
         deps,
-        expect.arrayContaining([
-          expect.objectContaining({ type: "file", mime: "application/pdf" }),
-        ]),
       );
+      expect(processPromptMock.mock.calls[0]?.[1]).toContain(".opencode-telegram-attachments/");
+
+      const storedDir = path.join(worktree, ".opencode-telegram-attachments");
+      const stored = await fs.readdir(storedDir);
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toContain("document.pdf");
+      expect((await fs.readFile(path.join(storedDir, stored[0]!))).equals(pdf)).toBe(true);
+      projectSpy.mockRestore();
+      await fs.rm(worktree, { recursive: true, force: true });
     });
 
     it("sends an image document as a file part without model capability gating", async () => {
@@ -312,7 +451,9 @@ describe("bot/handlers/document", () => {
         ctx,
         "",
         deps,
-        expect.arrayContaining([expect.objectContaining({ type: "file", mime: "image/png" })]),
+        expect.arrayContaining([
+          expect.objectContaining({ type: "file", mime: "image/png" }),
+        ]),
       );
     });
 
@@ -384,7 +525,9 @@ describe("bot/handlers/document", () => {
     });
 
     it("replies project_not_selected when no project is active", async () => {
-      const projectSpy = vi.spyOn(settingsStore, "getCurrentProject").mockReturnValue(undefined);
+      const projectSpy = vi
+        .spyOn(settingsStore, "getCurrentProject")
+        .mockReturnValue(undefined);
       const { ctx, replyMock } = createDocumentContext({
         document: {
           file_id: "bin-file-id",

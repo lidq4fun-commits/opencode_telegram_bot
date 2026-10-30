@@ -10,7 +10,7 @@ import {
 } from "../../app/services/file-download-service.js";
 import { logger } from "../../utils/logger.js";
 import { t } from "../../i18n/index.js";
-import type { FilePartInput } from "@opencode-ai/sdk/v2";
+import type { FilePartInput } from "../../opencode/types.js";
 import { flushPendingPrompt } from "./message-merger.js";
 import { createIncomingPrompt, type IncomingPrompt } from "../../app/types/prompt.js";
 import {
@@ -87,6 +87,7 @@ export async function handleDocumentMessage(
       cpp: "text/x-c++", java: "text/x-java", log: "text/plain",
       doc: "application/msword",
       docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      epub: "application/epub+zip",
       rtf: "application/rtf", odt: "application/vnd.oasis.opendocument.text",
       ppt: "application/vnd.ms-powerpoint",
       pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -123,7 +124,9 @@ export async function handleDocumentMessage(
       return;
     }
 
-    if (attachmentMime !== "application/octet-stream") {
+    const isMedia = /^(image|audio|video)\//i.test(attachmentMime);
+
+    if (isMedia) {
       const attachmentDataUri = toDataUri(genericAttachmentFile.buffer, attachmentMime);
       const filePart: FilePartInput = {
         type: "file",
@@ -132,7 +135,7 @@ export async function handleDocumentMessage(
         url: attachmentDataUri,
       };
       logger.info(
-        `[Document] Sending file (${genericAttachmentFile.buffer.length} bytes, ${filename}, ${attachmentMime}) with prompt`,
+        `[Document] Sending media file (${genericAttachmentFile.buffer.length} bytes, ${filename}, ${attachmentMime}) with prompt`,
       );
       await submitPrompt(caption, [filePart], doc.file_size);
       return;
@@ -140,6 +143,18 @@ export async function handleDocumentMessage(
 
     const activeProject = getCurrentProject();
     if (!activeProject?.worktree) {
+      if (attachmentMime !== "application/octet-stream") {
+        // No workspace to store the document in: keep the attachment-only behaviour.
+        const fallbackPart: FilePartInput = {
+          type: "file",
+          mime: attachmentMime,
+          filename: filename,
+          url: toDataUri(genericAttachmentFile.buffer, attachmentMime),
+        };
+        await submitPrompt(caption, [fallbackPart], doc.file_size);
+        return;
+      }
+
       await ctx.reply(t("bot.project_not_selected"));
       return;
     }
@@ -151,8 +166,15 @@ export async function handleDocumentMessage(
     const storedPath = path.join(attachmentDirectory, storedFilename);
     await fs.writeFile(storedPath, genericAttachmentFile.buffer);
     const relativePath = path.relative(activeProject.worktree, storedPath).split(path.sep).join("/");
-    const attachmentPrompt = `${caption.trim()}\n\nTelegram attachment stored verbatim in the active project: ${relativePath}`;
-    logger.info(`[Document] Stored unknown binary attachment locally: ${relativePath}`);
+    const attachmentPrompt = [
+      caption.trim(),
+      `The user sent a file (${filename}). Its original bytes are stored in the active project at:`,
+      `\`${relativePath}\``,
+      "Read this file with your tools before answering; unzip/extract DOCX, EPUB, PDF, Office or archive formats if needed. Do not ask the user to paste its contents.",
+    ]
+      .filter((part) => part.length > 0)
+      .join("\n\n");
+    logger.info(`[Document] Stored document attachment locally: ${relativePath}`);
     await submitPrompt(attachmentPrompt.trim(), [], doc.file_size);
     return;
   } catch (err) {

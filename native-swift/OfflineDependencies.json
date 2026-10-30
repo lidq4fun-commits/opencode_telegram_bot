@@ -1,6 +1,7 @@
 {
   "platform": "darwin-arm64",
   "dependencies": [
+    { "name": "gotd/cli (tg)", "version": "0.11.0", "archive": "tg_0.11.0_darwin_arm64.tar.gz", "url": "https://github.com/gotd/cli/releases/download/v0.11.0/tg_0.11.0_darwin_arm64.tar.gz", "sha256": "9e72b09903c69e0a3854dfdac722bd44b99d4f2f5b9721e28bf1fa201f2b62f7" },
     { "name": "Git source", "version": "2.56.0", "archive": "git-2.56.0.tar.xz", "url": "https://www.kernel.org/pub/software/scm/git/git-2.56.0.tar.xz", "sha256": "26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3" },
     { "name": "Node.js", "version": "24.15.0", "archive": "node-arm64.tar.gz", "url": "https://nodejs.org/dist/v24.15.0/node-v24.15.0-darwin-arm64.tar.gz", "sha256": "372331b969779ab5d15b949884fc6eaf88d5afe87bde8ba881d6400b9100ffc4" },
     { "name": "Bun", "version": "1.4.2", "archive": "bun-arm64.zip", "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-darwin-aarch64.zip", "sha256": "90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f" },

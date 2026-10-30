@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpencodeClient } from "@opencode-ai/sdk/v2";
+type OpencodeClient = ReturnType<typeof createV2OpencodeClient>;
 import { isExpectedOpencodeUnavailableError } from "../../../src/utils/opencode-error.js";
 
 const fake = vi.hoisted(() => ({
@@ -7,9 +7,6 @@ const fake = vi.hoisted(() => ({
   events: [] as unknown[],
   client: {
     server: { info: vi.fn() },
-    provider: { list: vi.fn() },
-    integration: { list: vi.fn() },
-    model: { list: vi.fn() },
     session: {
       get: vi.fn(),
       switchAgent: vi.fn(),
@@ -39,7 +36,10 @@ vi.mock("@opencode/client", () => ({
   },
 }));
 
-import { createV2OpencodeClient, type V2ClientExtension } from "../../../src/opencode/v2/client.js";
+import {
+  createV2OpencodeClient,
+  type V2ClientExtension,
+} from "../../../src/opencode/v2/client.js";
 
 const SESSION = {
   id: "ses-1",
@@ -96,89 +96,6 @@ describe("opencode/v2/client", () => {
     const result = await createClient().global.health();
 
     expect(result).toEqual({ data: { healthy: true, version: "2.0.16" }, error: undefined });
-  });
-
-  it("detects a selected provider that has never been connected", async () => {
-    fake.client.provider.list.mockResolvedValue({ data: [{ id: "p", integrationID: "p-login" }] });
-    fake.client.integration.list.mockResolvedValue({
-      data: [{ id: "p-login", methods: [{ type: "key" }], connections: [] }],
-    });
-    const client = createClient() as unknown as V2ClientExtension;
-    expect(
-      await client.provider.connectionStatus({ providerID: "p", modelID: "m", directory: "/repo" }),
-    ).toMatchObject({ data: "needs_auth" });
-  });
-
-  it("accepts environment credentials and rechecks after login", async () => {
-    fake.client.provider.list.mockResolvedValue({ data: [{ id: "p", integrationID: "p-login" }] });
-    fake.client.integration.list
-      .mockResolvedValueOnce({
-        data: [{ id: "p-login", methods: [{ type: "key" }], connections: [] }],
-      })
-      .mockResolvedValueOnce({
-        data: [
-          {
-            id: "p-login",
-            methods: [{ type: "env" }],
-            connections: [{ type: "env", name: "PROVIDER_KEY" }],
-          },
-        ],
-      });
-    const client = createClient() as unknown as V2ClientExtension;
-    expect(await client.provider.connectionStatus({ providerID: "p", modelID: "m" })).toMatchObject(
-      { data: "needs_auth" },
-    );
-    expect(await client.provider.connectionStatus({ providerID: "p", modelID: "m" })).toMatchObject(
-      { data: "ready" },
-    );
-  });
-
-  it("detects expired OAuth credentials without reading their contents", async () => {
-    fake.client.provider.list.mockResolvedValue({ data: [{ id: "p", integrationID: "p-login" }] });
-    fake.client.integration.list.mockResolvedValue({
-      data: [
-        {
-          id: "p-login",
-          methods: [{ type: "oauth" }],
-          connections: [
-            {
-              type: "credential",
-              method: "oauth",
-              status: { status: "needs_auth", message: "expired" },
-            },
-          ],
-        },
-      ],
-    });
-    const client = createClient() as unknown as V2ClientExtension;
-    expect(await client.provider.connectionStatus({ providerID: "p", modelID: "m" })).toMatchObject(
-      { data: "needs_auth" },
-    );
-  });
-
-  it("does not block free OpenCode models without an account", async () => {
-    fake.client.provider.list.mockResolvedValue({ data: [{ id: "opencode" }] });
-    fake.client.integration.list.mockResolvedValue({
-      data: [{ id: "opencode", methods: [{ type: "key" }], connections: [] }],
-    });
-    fake.client.model.list.mockResolvedValue({
-      data: [
-        { id: "free", providerID: "opencode", enabled: true, cost: [{ input: 0, output: 0 }] },
-      ],
-    });
-    const client = createClient() as unknown as V2ClientExtension;
-    expect(
-      await client.provider.connectionStatus({ providerID: "opencode", modelID: "free" }),
-    ).toMatchObject({ data: "ready" });
-  });
-
-  it("does not treat a local provider without an integration as unauthenticated", async () => {
-    fake.client.provider.list.mockResolvedValue({ data: [{ id: "ollama" }] });
-    fake.client.integration.list.mockResolvedValue({ data: [] });
-    const client = createClient() as unknown as V2ClientExtension;
-    expect(
-      await client.provider.connectionStatus({ providerID: "ollama", modelID: "local" }),
-    ).toMatchObject({ data: "unknown" });
   });
 
   it("returns a missing session as the V1 not-found error", async () => {

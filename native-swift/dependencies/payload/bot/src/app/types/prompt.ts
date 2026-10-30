@@ -1,4 +1,4 @@
-import type { FilePartInput } from "@opencode-ai/sdk/v2";
+import type { FilePartInput } from "../../opencode/types.js";
 
 export type TelegramPhotoSource = "standalone" | "album" | "rich";
 

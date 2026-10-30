@@ -53,6 +53,7 @@ enum Runtime {
         env["PATH"] = [engine(settings).deletingLastPathComponent().path,
             resources.appendingPathComponent("runtime/bin").path,
             resources.appendingPathComponent("dependencies/bun").path,
+            resources.appendingPathComponent("dependencies/tg").path,
             git.appendingPathComponent("bin").path,
             "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", env["PATH"] ?? ""].joined(separator: ":")
         return env

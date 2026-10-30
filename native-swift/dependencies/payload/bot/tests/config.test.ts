@@ -61,7 +61,10 @@ describe("config boolean env parsing", () => {
   });
 
   it("parses PROJECTS_EXCLUDED_PATHS as a comma-separated path list", async () => {
-    vi.stubEnv("PROJECTS_EXCLUDED_PATHS", "/home/user/repo-a,/home/user/repo-b,/home/user/repo-c");
+    vi.stubEnv(
+      "PROJECTS_EXCLUDED_PATHS",
+      "/home/user/repo-a,/home/user/repo-b,/home/user/repo-c",
+    );
 
     const config = await loadConfig();
 
@@ -470,8 +473,16 @@ describe("config OpenCode server version", () => {
   });
 
   it("rejects an unrecognised version", async () => {
-    const { parseOpencodeServerVersion } = await loadConfigModule();
-    expect(() => parseOpencodeServerVersion("2")).toThrow("Only OpenCode V2");
-    expect(() => parseOpencodeServerVersion("v1")).toThrow("Only OpenCode V2");
+    vi.stubEnv("OPENCODE_SERVER_VERSION", "2");
+
+    await expect(loadConfig()).rejects.toThrow("Only OpenCode V2 is supported");
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+  it("rejects V1 instead of silently selecting a different client", async () => {
+    vi.stubEnv("OPENCODE_SERVER_VERSION", "v1");
+    await expect(loadConfig()).rejects.toThrow("Only OpenCode V2 is supported");
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
 });

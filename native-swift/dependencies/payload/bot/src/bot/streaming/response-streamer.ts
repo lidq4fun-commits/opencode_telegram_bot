@@ -1,5 +1,7 @@
 import type { Api, RawApi } from "grammy";
 import { logger } from "../../utils/logger.js";
+import { withTelegramDeliveryPriority } from "../telegram-send-scheduler.js";
+import { MAX_TELEGRAM_RATE_LIMIT_WAIT_MS } from "../telegram-rate-limit-cooldown.js";
 import { chunkPlainText } from "../render/chunker.js";
 import { getTelegramRenderedPartSignature } from "../render/part-signature.js";
 import type { TelegramRenderedPart } from "../render/types.js";
@@ -440,6 +442,13 @@ export class ResponseStreamer {
   }
 
   private async flushState(state: StreamState, reason: string): Promise<boolean> {
+    return withTelegramDeliveryPriority(
+      reason === "complete" || reason === "flush_pending" ? "important" : "progress",
+      () => this.flushStateWithPriority(state, reason),
+    );
+  }
+
+  private async flushStateWithPriority(state: StreamState, reason: string): Promise<boolean> {
     if (state.cancelled) {
       return false;
     }
@@ -479,6 +488,10 @@ export class ResponseStreamer {
         return true;
       } catch (error) {
         const retryAfterMs = getRetryAfterMs(error);
+        if (retryAfterMs !== null && retryAfterMs > MAX_TELEGRAM_RATE_LIMIT_WAIT_MS) {
+          this.markStreamBroken(state, error, reason);
+          return false;
+        }
         if (retryAfterMs !== null) {
           const delayMs = Math.max(this.resolveThrottleMs(state.sessionId), retryAfterMs);
           logger.warn(

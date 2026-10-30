@@ -1,9 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
-  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "guard-inbox" })),
-}));
-import { admitPromptToInbox } from "../../../src/bot/handlers/prompt.js";
 import type { Context, NextFunction } from "grammy";
 import { interactionGuardMiddleware } from "../../../src/bot/middleware/interaction-guard.js";
 import { t } from "../../../src/i18n/index.js";
@@ -13,6 +8,10 @@ import {
   promptQueue,
 } from "../../../src/app/managers/prompt-queue-manager.js";
 import { createIncomingPrompt } from "../../../src/app/types/prompt.js";
+vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
+}));
 import { setIncomingPrompt } from "../../../src/bot/handlers/rich-message-handler.js";
 import * as settingsStore from "../../../src/app/stores/settings-store.js";
 import { startInteractionForTest } from "../../helpers/interaction.js";
@@ -29,8 +28,7 @@ const mocked = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../src/app/services/run-control-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../src/app/services/run-control-service.js")>();
+  const actual = await importOriginal<typeof import("../../../src/app/services/run-control-service.js")>();
   return {
     ...actual,
     reconcileForegroundBusyState: mocked.reconcileForegroundBusyStateMock,
@@ -322,7 +320,9 @@ describe("interactionGuardMiddleware", () => {
     await interactionGuardMiddleware(ctx, next, deps);
 
     expect(next).not.toHaveBeenCalled();
-    expect(ctx.reply).toHaveBeenCalledWith(`${t("bot.session_busy")} ${t("queue.disabled_hint")}`);
+    expect(ctx.reply).toHaveBeenCalledWith(
+      `${t("bot.session_busy")} ${t("queue.disabled_hint")}`,
+    );
   });
 
   it("passes queued media to its handler while busy", async () => {
@@ -344,10 +344,7 @@ describe("interactionGuardMiddleware", () => {
   it("does not pass media through a blocking interaction to the queue", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
-    startInteractionForTest(deps.interactionManager, {
-      kind: "permission",
-      expectedInput: "callback",
-    });
+    startInteractionForTest(deps.interactionManager, { kind: "permission", expectedInput: "callback" });
     const ctx = createVoiceContext();
     const next: NextFunction = vi.fn().mockResolvedValue(undefined);
 
@@ -474,25 +471,18 @@ describe("interactionGuardMiddleware", () => {
     await interactionGuardMiddleware(ctx, next, deps);
 
     expect(next).not.toHaveBeenCalled();
-    expect(admitPromptToInbox).toHaveBeenCalledWith(
-      ctx,
+    expect(promptQueue.list()).toEqual([
       expect.objectContaining({
-        text: "",
-        photos: [{ fileId: "photo-1", filename: "rich.jpg", source: "rich", fileSize: 512 }],
-        mediaBytes: 512,
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
       }),
-      expect.anything(),
-      "queue",
-    );
-    expect(promptQueue.size()).toBe(1);
-    expect(promptQueue.mediaSize()).toBe(0);
+    ]);
     expect(ctx.reply).toHaveBeenCalledWith(
       t("queue.added", { count: "1", max: String(MAX_QUEUED_PROMPTS) }),
       expect.anything(),
     );
   });
 
-  it("rejects a rich photo prompt with an unknown media size while busy", async () => {
+  it("admits a V2 rich photo prompt with unknown source size", async () => {
     mocked.getPromptQueueMode.mockReturnValue("queue");
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
     const ctx = createTextContext("");
@@ -507,14 +497,14 @@ describe("interactionGuardMiddleware", () => {
     await interactionGuardMiddleware(ctx, next, deps);
 
     expect(next).not.toHaveBeenCalled();
-    expect(promptQueue.size()).toBe(0);
+    expect(promptQueue.size()).toBe(1);
     expect(ctx.reply).toHaveBeenCalledWith(
-      t("queue.media_limit", { maxSizeMb: "20" }),
+      t("queue.added", { count: "1", max: String(MAX_QUEUED_PROMPTS) }),
       expect.anything(),
     );
   });
 
-  it("rejects a rich photo aggregate above the media limit while busy", async () => {
+  it("does not apply the removed local V1 media cap to rich V2 photos", async () => {
     mocked.getPromptQueueMode.mockReturnValue("queue");
     deps.foregroundSessionState.markBusy("session-1", "D:\\Projects\\Repo");
     const ctx = createTextContext("");
@@ -539,7 +529,7 @@ describe("interactionGuardMiddleware", () => {
     expect(next).not.toHaveBeenCalled();
     expect(promptQueue.mediaSize()).toBe(0);
     expect(ctx.reply).toHaveBeenCalledWith(
-      t("queue.media_limit", { maxSizeMb: "20" }),
+      t("queue.added", { count: "1", max: String(MAX_QUEUED_PROMPTS) }),
       expect.anything(),
     );
   });

@@ -18,14 +18,21 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/OpenCodeTelegram" "$APP/Contents/MacOS/OpenCodeTelegram"
 cp "$ROOT/../desktop/EmbeddedWebSync.js" "$APP/Contents/Resources/EmbeddedWebSync.js"
 PAYLOAD="$ROOT/dependencies/payload"
-for input in runtime/bin/node bot/dist/cli.js bot/node_modules/better-sqlite3/prebuilds/darwin-arm64.node dependencies/bun/bun dependencies/git/bin/git dependencies/opencode/v2/opencode; do
+
+# Guard macOS-only behavior that a shared-source rebuild can overwrite.
+grep -q 'compactOutputMode ?? true' "$PAYLOAD/bot/dist/app/stores/settings-store.js"
+grep -q 'routeURL' "$APP/Contents/Resources/EmbeddedWebSync.js"
+grep -q 'auth_token' "$APP/Contents/Resources/EmbeddedWebSync.js"
+grep -q 'isDirectoryWritable' "$PAYLOAD/bot/dist/bot/callbacks/file-browser-callback-handler.js"
+grep -q 'create_project.permission_denied' "$PAYLOAD/bot/dist/i18n/zh.js"
+for input in runtime/bin/node bot/dist/cli.js bot/node_modules/better-sqlite3/prebuilds/darwin-arm64.node dependencies/bun/bun dependencies/git/bin/git dependencies/opencode/v2/opencode dependencies/tg/tg; do
     [[ -f "$PAYLOAD/$input" ]] || { echo "Missing runtime input: $input. Run Prepare-Runtime.command first." >&2; exit 1; }
 done
 ditto "$PAYLOAD/runtime" "$DEPS/runtime"
 mkdir -p "$DEPS/bot"
 for input in dist node_modules assets; do ditto "$PAYLOAD/bot/$input" "$DEPS/bot/$input"; done
-for input in package.json package-lock.json .env.example LICENSE EOT10Crypto.mjs; do cp "$PAYLOAD/bot/$input" "$DEPS/bot/$input"; done
-for input in bun git git-source licenses; do ditto "$PAYLOAD/dependencies/$input" "$DEPS/dependencies/$input"; done
+for input in package.json package-lock.json .env.example LICENSE EOT10Crypto.mjs EOT10CryptoWorker.mjs; do cp "$PAYLOAD/bot/$input" "$DEPS/bot/$input"; done
+for input in bun git git-source licenses tg; do ditto "$PAYLOAD/dependencies/$input" "$DEPS/dependencies/$input"; done
 ditto "$PAYLOAD/dependencies/opencode/v2" "$DEPS/dependencies/opencode/v2"
 if [[ -d "$APP/Contents/Resources/dependencies/opencode/v1" ]]; then
     rm -r "$APP/Contents/Resources/dependencies/opencode/v1"

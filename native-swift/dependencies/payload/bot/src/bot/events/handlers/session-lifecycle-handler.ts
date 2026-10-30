@@ -2,7 +2,18 @@ import { t } from "../../../i18n/index.js";
 import { logger } from "../../../utils/logger.js";
 import { markAttachedSessionIdle } from "../../../app/services/attach-service.js";
 import { shouldSuppressUserAbortSessionError } from "../../../app/managers/abort-suppression-manager.js";
-import { clearPromptResponseMode } from "../../handlers/prompt.js";
+import {
+  clearPromptResponseMode,
+  consumePromptResponseMode,
+  startPromptRun,
+} from "../../handlers/prompt.js";
+import {
+  forgetPromptForModelRetry,
+  isModelUnavailableMessage,
+  retryPromptAfterModelUnavailable,
+} from "../../../app/services/prompt-model-retry.js";
+import { getTtsMode } from "../../../app/stores/settings-store.js";
+import { opencodeClient } from "../../../opencode/client.js";
 import { dispatchNextQueuedPrompt } from "../../handlers/prompt-queue-dispatch.js";
 import { resetStreamThrottle } from "../../streaming/stream-throttle.js";
 import {
@@ -29,6 +40,7 @@ export function registerSessionLifecycleHandlers(deps: SessionLifecycleDeps): vo
 
   summaryAggregator.setOnSessionIdle(async (sessionId, { interrupted }) => {
     resetStreamThrottle(sessionId);
+    forgetPromptForModelRetry(sessionId);
     await markAttachedSessionIdle(sessionId, deps);
     // Dropped immediately when this session is no longer current: the early
     // returns below would otherwise leave a compact-progress timer armed.
@@ -116,7 +128,8 @@ export function registerSessionLifecycleHandlers(deps: SessionLifecycleDeps): vo
     runtime.clearAssistantResponseSession(sessionId, "session_error");
     // Parked cards keep counting their background operations, as their full-mode lines do.
     runtime.compactProgressStreamer.discardOpenCard(sessionId, "session_error");
-    clearPromptResponseMode(sessionId);
+    const errorResponseMode =
+      consumePromptResponseMode(sessionId) ?? (getTtsMode() === "all" ? "text_and_tts" : "text_only");
     deps.assistantRunState.clearRun(sessionId, "session_error");
     await Promise.all([
       runtime.toolMessageBatcher.flushSession(sessionId, "session_error"),
@@ -131,11 +144,55 @@ export function registerSessionLifecycleHandlers(deps: SessionLifecycleDeps): vo
       return;
     }
 
+    // A provider-config fetch can fail for a few seconds (VPN/proxy or TLS hiccup) and the
+    // engine then reports the model as unavailable. Re-sending the same prompt recovers the
+    // turn instead of showing a dead error.
+    if (isModelUnavailableMessage(normalizedMessage)) {
+      const retried = await retryPromptAfterModelUnavailable(sessionId, {
+        send: (request) =>
+          opencodeClient.session.promptAsync(
+            request as unknown as Parameters<typeof opencodeClient.session.promptAsync>[0],
+          ),
+        onRetryAttempt: async (attempt, total) => {
+          if (attempt > 1) {
+            return;
+          }
+
+          await runtime.delivery
+            .sendText(
+              destination,
+              t("bot.model_unavailable_retrying", {
+                attempt: String(attempt),
+                total: String(total),
+              }),
+            )
+            .catch((err) => {
+              logger.warn("[Bot] Failed to send the model retry notice:", err);
+            });
+        },
+        onRetryAccepted: async (request) => {
+          await startPromptRun({ id: sessionId, directory: request.directory }, deps, {
+            agent: request.agent,
+            providerID: request.model?.providerID ?? "",
+            modelID: request.model?.modelID ?? "",
+            responseMode: errorResponseMode,
+          });
+        },
+      });
+
+      if (retried) {
+        logger.info(`[Bot] Model unavailable error recovered by an automatic retry: ${sessionId}`);
+        return;
+      }
+    }
+
+    const formattedError = formatSessionMessage(normalizedMessage);
+    const errorText = isModelUnavailableMessage(normalizedMessage)
+      ? t("bot.model_unavailable_failed", { message: formattedError })
+      : t("bot.session_error", { message: formattedError });
+
     await runtime.delivery
-      .sendText(
-        destination,
-        t("bot.session_error", { message: formatSessionMessage(normalizedMessage) }),
-      )
+      .sendText(destination, errorText)
       .catch((err) => {
         logger.error("[Bot] Failed to send session.error message:", err);
       });

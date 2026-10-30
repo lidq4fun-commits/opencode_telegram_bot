@@ -15,6 +15,7 @@ const mocked = vi.hoisted(() => ({
   scheduledTaskInitializeMock: vi.fn(),
   scheduledTaskShutdownMock: vi.fn(),
   reconcileStoredModelSelectionMock: vi.fn(),
+  seedModelCatalogFromDiskMock: vi.fn(),
   startModelCatalogWarmupMock: vi.fn(),
   clearServiceStateFileMock: vi.fn(),
   isServiceChildProcessMock: vi.fn(),
@@ -74,10 +75,8 @@ vi.mock("../../src/app/stores/settings-store.js", () => ({
 
 vi.mock("../../src/app/services/model-selection-service.js", () => ({
   reconcileStoredModelSelection: mocked.reconcileStoredModelSelectionMock,
+  seedModelCatalogFromDisk: mocked.seedModelCatalogFromDiskMock,
   startModelCatalogWarmup: mocked.startModelCatalogWarmupMock,
-}));
-vi.mock("../../src/app/services/provider-login-service.js", () => ({
-  notifyProviderLoginIfNeeded: vi.fn(),
 }));
 
 vi.mock("../../src/runtime/mode.js", () => ({
@@ -194,6 +193,7 @@ describe("app/start-bot-app", () => {
     mocked.scheduledTaskInitializeMock.mockReset();
     mocked.scheduledTaskShutdownMock.mockReset();
     mocked.reconcileStoredModelSelectionMock.mockReset();
+    mocked.seedModelCatalogFromDiskMock.mockReset();
     mocked.startModelCatalogWarmupMock.mockReset();
     mocked.clearServiceStateFileMock.mockReset();
     mocked.isServiceChildProcessMock.mockReset();
@@ -450,7 +450,9 @@ describe("app/start-bot-app", () => {
     const networkError = Object.assign(new Error("Network request for 'getWebhookInfo' failed!"), {
       name: "HttpError",
     });
-    bot.api.getWebhookInfo.mockRejectedValueOnce(networkError).mockResolvedValueOnce({ url: "" });
+    bot.api.getWebhookInfo
+      .mockRejectedValueOnce(networkError)
+      .mockResolvedValueOnce({ url: "" });
     mocked.createBotMock.mockReturnValue(bot);
 
     const appPromise = startBotApp();
@@ -470,12 +472,9 @@ describe("app/start-bot-app", () => {
   it("retries a 501 server error then starts polling", async () => {
     vi.useFakeTimers();
     const bot = createBot();
-    const serverError = Object.assign(
-      new Error("Call to 'getWebhookInfo' failed! (501: Not Implemented)"),
-      {
-        error_code: 501,
-      },
-    );
+    const serverError = Object.assign(new Error("Call to 'getWebhookInfo' failed! (501: Not Implemented)"), {
+      error_code: 501,
+    });
     bot.api.getWebhookInfo.mockRejectedValueOnce(serverError).mockResolvedValueOnce({ url: "" });
     mocked.createBotMock.mockReturnValue(bot);
 
@@ -523,9 +522,7 @@ describe("app/start-bot-app", () => {
     const networkError = Object.assign(new Error("Network request for 'getMe' failed!"), {
       name: "HttpError",
     });
-    bot.api.getMe
-      .mockRejectedValueOnce(networkError)
-      .mockResolvedValueOnce({ username: "test_bot" });
+    bot.api.getMe.mockRejectedValueOnce(networkError).mockResolvedValueOnce({ username: "test_bot" });
     mocked.createBotMock.mockReturnValue(bot);
 
     const appPromise = startBotApp();
@@ -545,12 +542,9 @@ describe("app/start-bot-app", () => {
   it("retries getWebhookInfo on a 5xx error then starts polling", async () => {
     vi.useFakeTimers();
     const bot = createBot();
-    const serverError = Object.assign(
-      new Error("Call to 'getWebhookInfo' failed! (502: Bad Gateway)"),
-      {
-        error_code: 502,
-      },
-    );
+    const serverError = Object.assign(new Error("Call to 'getWebhookInfo' failed! (502: Bad Gateway)"), {
+      error_code: 502,
+    });
     bot.api.getWebhookInfo.mockRejectedValueOnce(serverError).mockResolvedValueOnce({ url: "" });
     mocked.createBotMock.mockReturnValue(bot);
 
@@ -570,10 +564,7 @@ describe("app/start-bot-app", () => {
     const networkError = Object.assign(new Error("Network request for 'deleteWebhook' failed!"), {
       name: "HttpError",
     });
-    bot.api.getWebhookInfo.mockResolvedValue({
-      url: "https://example.invalid/hook",
-      pending_update_count: 0,
-    });
+    bot.api.getWebhookInfo.mockResolvedValue({ url: "https://example.invalid/hook", pending_update_count: 0 });
     bot.api.deleteWebhook.mockRejectedValueOnce(networkError).mockResolvedValueOnce(undefined);
     mocked.createBotMock.mockReturnValue(bot);
 
@@ -593,12 +584,9 @@ describe("app/start-bot-app", () => {
 
   it("does not retry a rejected bot token and never starts polling", async () => {
     const bot = createBot();
-    const tokenError = Object.assign(
-      new Error("Call to 'getWebhookInfo' failed! (401: Unauthorized)"),
-      {
-        error_code: 401,
-      },
-    );
+    const tokenError = Object.assign(new Error("Call to 'getWebhookInfo' failed! (401: Unauthorized)"), {
+      error_code: 401,
+    });
     bot.api.getWebhookInfo.mockRejectedValue(tokenError);
     mocked.createBotMock.mockReturnValue(bot);
 
@@ -614,12 +602,9 @@ describe("app/start-bot-app", () => {
 
   it("does not retry a 404 token error", async () => {
     const bot = createBot();
-    const tokenError = Object.assign(
-      new Error("Call to 'getWebhookInfo' failed! (404: Not Found)"),
-      {
-        error_code: 404,
-      },
-    );
+    const tokenError = Object.assign(new Error("Call to 'getWebhookInfo' failed! (404: Not Found)"), {
+      error_code: 404,
+    });
     bot.api.getWebhookInfo.mockRejectedValue(tokenError);
     mocked.createBotMock.mockReturnValue(bot);
 
@@ -629,12 +614,9 @@ describe("app/start-bot-app", () => {
 
   it("does not retry other Telegram startup errors", async () => {
     const bot = createBot();
-    const conflictError = Object.assign(
-      new Error("Call to 'getWebhookInfo' failed! (409: Conflict)"),
-      {
-        error_code: 409,
-      },
-    );
+    const conflictError = Object.assign(new Error("Call to 'getWebhookInfo' failed! (409: Conflict)"), {
+      error_code: 409,
+    });
     bot.api.getWebhookInfo.mockRejectedValue(conflictError);
     mocked.createBotMock.mockReturnValue(bot);
 

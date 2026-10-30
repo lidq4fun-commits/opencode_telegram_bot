@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { t } from "../../../i18n/index.js";
 import { logger } from "../../../utils/logger.js";
 import type { SubagentInfo, ToolInfo } from "../../../app/managers/summary-aggregation-manager.js";
@@ -493,4 +495,64 @@ export function registerToolActivityHandlers(deps: ToolActivityDeps): void {
       runtime.toolCallStreamer.endDocumentBoundary(fileInfo.sessionId);
     }
   });
+
+  summaryAggregator.setOnToolImage(async (image) => {
+    const destination = policy.getDestination(image.sessionId);
+    if (!destination || !policy.isForegroundSession(image.sessionId)) {
+      return;
+    }
+
+    try {
+      const bytes = await readToolImage(image.uri);
+      if (!bytes) {
+        logger.debug(`[Bot] Skipped an unsupported tool image URI: ${image.mime}`);
+        return;
+      }
+
+      // A generated image is shown as a real photo; EOT10 encrypts it in the API layer.
+      const caption = image.title?.slice(0, 1024);
+      await runtime.delivery.sendPhoto(
+        destination,
+        bytes,
+        image.filename,
+        caption ? { caption } : undefined,
+      );
+    } catch (error) {
+      logger.warn(`[Bot] Failed to send a ${image.tool} image to Telegram:`, error);
+    }
+  });
+}
+
+/** Reads a tool image from its data URI or local path; external URLs are not fetched. */
+async function readToolImage(uri: string): Promise<Buffer | null> {
+  if (uri.startsWith("data:")) {
+    const comma = uri.indexOf(",");
+    if (comma < 0) {
+      return null;
+    }
+
+    const metadata = uri.slice(5, comma);
+    const payload = uri.slice(comma + 1);
+    return Buffer.from(payload, metadata.includes(";base64") ? "base64" : "utf8");
+  }
+
+  try {
+    if (uri.startsWith("file://")) {
+      return await readFile(fileURLToPath(uri));
+    }
+  } catch (error) {
+    logger.warn("[Bot] Failed to read a tool image file:", error);
+    return null;
+  }
+
+  if (/^[A-Za-z]:[\\/]/.test(uri) || uri.startsWith("/")) {
+    try {
+      return await readFile(uri);
+    } catch (error) {
+      logger.warn("[Bot] Failed to read a tool image path:", error);
+      return null;
+    }
+  }
+
+  return null;
 }

@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
-  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "voice-inbox" })),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
 }));
-import { admitPromptToInbox } from "../../../src/bot/handlers/prompt.js";
 import { EventEmitter } from "node:events";
 import type { Context } from "grammy";
 import type { VoiceMessageDeps } from "../../../src/bot/handlers/voice-handler.js";
@@ -181,11 +180,13 @@ describe("bot/handlers/voice-handler", () => {
     mocked.getPromptQueueModeMock.mockReturnValue("queue");
     const { handleVoiceMessage } = await loadVoiceModule();
     const { promptQueue } = await import("../../../src/app/managers/prompt-queue-manager.js");
-    const { initializePromptQueueDispatch } =
-      await import("../../../src/bot/handlers/prompt-queue-dispatch.js");
+    const { initializePromptQueueDispatch } = await import(
+      "../../../src/bot/handlers/prompt-queue-dispatch.js"
+    );
     // The module graph was reset above, so the container has to come from it as well.
-    const { createTestAppContainer: createFreshTestAppContainer } =
-      await import("../../helpers/app-container.js");
+    const { createTestAppContainer: createFreshTestAppContainer } = await import(
+      "../../helpers/app-container.js"
+    );
     const container = createFreshTestAppContainer();
     promptQueue.__resetForTests();
     container.foregroundSessionState.markBusy("session-1", "/repo");
@@ -198,15 +199,10 @@ describe("bot/handlers/voice-handler", () => {
 
     expect(transcribeMock).toHaveBeenCalledTimes(1);
     expect(processPromptMock).not.toHaveBeenCalled();
-    expect(admitPromptToInbox).toHaveBeenCalledWith(
-      ctx,
-      expect.objectContaining({ text: "run tests" }),
-      deps,
-      "queue",
-    );
     expect(promptQueue.list()).toEqual([
       expect.objectContaining({
         displayText: "run tests",
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
         responseMode: "text_only",
       }),
     ]);

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { decryptEot10, encryptEot10RichMessage } from "../../../EOT10Crypto.mjs";
+import { decryptEot10, encryptEot10RichMessage } from "../EOT10Crypto.mjs";
 
 interface RichNode {
   type: string;
@@ -23,8 +23,6 @@ describe("EOT10 rich message text boundaries", () => {
     const text = ["1. ", "First item", "\n2. ", "Second item"];
     const encrypted = encryptBlocks([{ type: "paragraph", text }]);
     const leaves = encrypted[0]?.text as string[];
-
-    // Telegram coalesces adjacent string leaves into one TL text field.
     expect(decryptEot10(leaves.join(""))).toBe(text.join(""));
     expect(leaves).toHaveLength(1);
     expect(text).toEqual(["1. ", "First item", "\n2. ", "Second item"]);

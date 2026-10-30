@@ -29,10 +29,11 @@ No public inbound ports are required for normal usage.
 
 ### OpenCode server management
 
-- Works only with OpenCode V2 servers; V1 configuration and executables are rejected. The desktop migrates its previous engine selection without deleting stored data.
+- [x] OpenCode V2 only; defaults to V2 and rejects V1 configuration. The V1 SDK and bundled engine are no longer included.
+- [x] Desktop scans V2 installations, marks bundled engines in blue, offers gray Apply / green Applied and red Uninstall actions, and updates the stable CLI entry point when switching engines.
+- [x] Desktop checks the applied version against the official stable V2 release, downloads into a separate managed folder, verifies it, and applies it. Engine controls support Chinese and English.
 - Check OpenCode server status (running / not running)
-- Detect missing or expired credentials for the selected provider at startup and before prompts; guide the user to the computer's OpenCode web interface and `/connect`, without exposing credentials. Free OpenCode models and local providers are not blocked by an account requirement.
-- Start the registered V2 background server (`opencode serve --service`); reject legacy executables and invalid credentials, and avoid starting a duplicate registered service.
+- Start OpenCode server from the app: `opencode serve` on V1, the registered background server (`opencode serve --service`) on V2; no start while the configured address answers with the wrong password or as the other version, while the local `opencode` executable is the other version, or on V2 while a registered V2 server runs on another port — the reason goes to the log
 - Stop OpenCode server from the app
 - Optionally monitor and auto-restart a local OpenCode server, with the same start rules
 
@@ -43,6 +44,8 @@ No public inbound ports are required for normal usage.
 - Persist selected project between restarts (`settings.json`)
 
 ### Session management
+
+- [x] Telegram presentation and outage notices do not block local session attachment or new commands. Desktop heartbeats continue during pending operations; acknowledgements still wait for completion, and state writes are serialized. Late question sends cannot replace or clear a newer question.
 
 - [x] Embedded desktop workspace and Telegram synchronize project, session, model and variant through local metadata and acknowledged actions. Phone actions or an active answer trigger forced following with an explanation; unchanged idle polling never prevents project browsing. Desktop prompts wait for session attachment before reaching OpenCode.
 
@@ -79,7 +82,9 @@ No public inbound ports are required for normal usage.
 - Render assistant replies with native Telegram formatting: real tables with the column alignment declared in markdown, bullet lists with their nesting, block quotes that keep their nested content, headings, and syntax-highlighted code. Numbered lists and checklists keep literal markers (`1.`, ✅/🔲), because Telegram clients number a native ordered list from zero and do not draw the native checkbox at all
 - Deliver reasoning as a collapsed quote that expands on tap
 - Hide full model reasoning by default; optionally stream it in the thinking message when explicitly enabled
-- Stream intermediate assistant/tool/thinking edits and pinned file-change updates once per second for the first minute, then slow down to 2s / 5s / 10s so long runs stay under Telegram rate limits; the interval resets when the run stops
+- [x] Merge intermediate assistant/tool/thinking updates into the latest state at 5s intervals, slowing to 10s after fifteen minutes. Pinned file changes refresh at 15s intervals without waiting for a quiet period; busy-session metadata updates share that interval, and idle completion refreshes immediately.
+- [x] Share one per-chat send/edit budget with at least 1.1s between requests, including encrypted text chunks. Questions, inline confirmations and final response edits take priority over pending progress. Pending edits to the same message/draft and typing actions are coalesced. Polling and incoming commands remain independent of this queue, and short Telegram flood waits pause the whole chat's sends.
+- [x] Release long Telegram flood waits inside response/tool streamers so progress completion cannot block later interactions for minutes. Compact progress skips unchanged text; full and compact output modes remain available.
 - Split long responses into multiple Telegram messages, which is now rare: native messages hold 32768 characters instead of 4096
 - Send code updates as files (size-limited)
 
@@ -131,6 +136,11 @@ Current command set:
 - `/recent` - show recent sessions across projects and worktrees with their status and switch directly to one
 - `/messages` - browse user messages in the current session
 - `/projects` - show and switch projects
+- `/delete_session` - delete a session of the current project after confirmation
+- `/delete_project` - hide a project on both phone and desktop and delete all of its sessions after confirmation; files on disk are never deleted
+- `/open` - browse any folder on any drive to add a project (unrestricted unless `OPEN_BROWSER_ROOTS` is set)
+- `/create_project` - browse any folder, enter a folder name, create it there and open it as a project
+- `/connect` - connect a model provider by browser/device OAuth login or API key; providers can be searched by name, device flows work from the phone, loopback browser flows can be finished on the PC or by pasting the redirect link/code, and API-key messages are deleted after saving; the Telegram message updates when the login completes
 - `/worktree` - show and switch existing git worktrees for the current repository
 - `/settings` - change bot settings
 - `/task` - create a scheduled task
@@ -160,6 +170,8 @@ Interaction routing rules:
 Model picker behavior:
 
 - Uses OpenCode local model state (`favorite` + `recent`)
+- The selected model is always the first favorite: a pick made in Telegram is not written to
+  OpenCode's state, so without it the model in use would be missing from the picker
 - Favorites are shown first, recent models are shown after favorites
 - Models already present in favorites are not duplicated in recent
 - Default configured model (`OPENCODE_MODEL_PROVIDER` + `OPENCODE_MODEL_ID`) is treated as favorite
@@ -173,6 +185,25 @@ Agent picker behavior:
 - Picking an agent applies that agent's configured model and/or variant when the agent names
   them; a field the agent does not name is left as it is. This is not a model pick and does
   not open the variant menu
+
+Startup and runtime behavior (desktop-managed):
+
+- The desktop starts the OpenCode service and the Bot at the same time: the Bot waits for the
+  engine instead of delaying its own Telegram startup, and `OPENCODE_MANAGED_BY_DESKTOP=1` keeps
+  it from spawning a competing engine
+- Startup requests that do not depend on each other run concurrently (`getMe` beside webhook
+  removal, the stored-model reconcile beside Bot assembly)
+- A complete provider catalog is saved next to `settings.json` and served for 30 seconds after
+  a restart while a real refresh runs in the background
+- Desktop sync state is written on change with a 2-second heartbeat, not twice per second
+- Event loop delay is measured (`[Perf]` debug line every minute, a warning above 150 ms p95);
+  the EOT10 session key is derived on the libuv pool and large EOT10 attachments are encrypted
+  and decrypted in one worker thread
+- A run that fails with `Model unavailable` (the engine could not refresh a provider config over
+  the network) re-sends the same prompt up to three times with backoff, and only then reports an
+  actionable error
+- Files a tool returns (screenshots, generated images) are forwarded to Telegram as photos
+  instead of being dropped with the text-only tool output
 
 ### Main features already implemented
 

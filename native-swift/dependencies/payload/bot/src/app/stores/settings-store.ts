@@ -59,7 +59,10 @@ async function readSettingsFile(): Promise<Settings> {
     return await readSettingsFileAt(settingsFilePath);
   } catch (primaryError) {
     if (!isFileNotFound(primaryError)) {
-      logger.warn(`[SettingsManager] Cannot read settings file ${settingsFilePath}:`, primaryError);
+      logger.warn(
+        `[SettingsManager] Cannot read settings file ${settingsFilePath}:`,
+        primaryError,
+      );
     }
 
     try {
@@ -156,6 +159,50 @@ export function clearProject(): void {
   void writeSettingsFile(currentSettings);
 }
 
+function projectKey(worktree: string): string {
+  const usesWindowsPath =
+    process.platform === "win32" ||
+    /^[A-Za-z]:[\\/]/.test(worktree) ||
+    worktree.startsWith("\\\\");
+  const pathModule = usesWindowsPath ? path.win32 : path.posix;
+  const normalized = pathModule.normalize(worktree);
+  const root = pathModule.parse(normalized).root;
+  const trimmed = normalized === root ? normalized : normalized.replace(/[\\/]+$/, "");
+  return usesWindowsPath ? trimmed.toLowerCase() : trimmed;
+}
+
+/** Canonical keys of projects hidden from the project list on both mobile and desktop. */
+export function getHiddenProjects(): string[] {
+  return [...(currentSettings.hiddenProjects ?? [])];
+}
+
+export function isProjectHidden(worktree: string): boolean {
+  return (currentSettings.hiddenProjects ?? []).includes(projectKey(worktree));
+}
+
+export function hideProject(worktree: string): void {
+  const key = projectKey(worktree);
+  const hidden = currentSettings.hiddenProjects ?? [];
+  if (hidden.includes(key)) {
+    return;
+  }
+
+  currentSettings.hiddenProjects = [...hidden, key];
+  void writeSettingsFile(currentSettings);
+}
+
+export function unhideProject(worktree: string): void {
+  const key = projectKey(worktree);
+  const hidden = currentSettings.hiddenProjects ?? [];
+  if (!hidden.includes(key)) {
+    return;
+  }
+
+  const next = hidden.filter((entry) => entry !== key);
+  currentSettings.hiddenProjects = next.length > 0 ? next : undefined;
+  void writeSettingsFile(currentSettings);
+}
+
 export function getCurrentSession(): SessionInfo | undefined {
   return currentSettings.currentSession;
 }
@@ -182,7 +229,7 @@ export function setTtsMode(mode: TtsMode): void {
 }
 
 export function getCompactOutputMode(): boolean {
-  return currentSettings.compactOutputMode ?? false;
+  return currentSettings.compactOutputMode ?? true;
 }
 
 export function setCompactOutputMode(enabled: boolean): void {
@@ -246,20 +293,25 @@ export function setSendDiffFileAttachments(enabled: boolean): void {
   void writeSettingsFile(currentSettings);
 }
 
-/** Preserve the old queue preference until the user explicitly selects a V2 mode. */
+/**
+ * The message queue mode in effect for the configured OpenCode server. V1 keeps its
+ * released On/Off boolean (off by default); V2 stores its own mode (steer by default),
+ * so neither version's choice moves the other's.
+ */
 export function getPromptQueueMode(): PromptQueueMode {
-  return (
-    currentSettings.promptQueueMode ??
-    (currentSettings.promptQueueEnabled === undefined
-      ? "steer"
-      : currentSettings.promptQueueEnabled
-        ? "queue"
-        : "off")
-  );
+  if (config.opencode.serverVersion === "v2") {
+    return currentSettings.promptQueueMode ?? "steer";
+  }
+
+  return currentSettings.promptQueueEnabled === true ? "queue" : "off";
 }
 
 export function setPromptQueueMode(mode: PromptQueueMode): void {
-  currentSettings.promptQueueMode = mode;
+  if (config.opencode.serverVersion === "v2") {
+    currentSettings.promptQueueMode = mode;
+  } else {
+    currentSettings.promptQueueEnabled = mode !== "off";
+  }
   void writeSettingsFile(currentSettings);
 }
 
@@ -391,7 +443,9 @@ function applyInitialSettingsPreset(preset: Record<string, unknown>): void {
     } else {
       // Boolean settings: compactOutputMode, deleteCompactProgressOnFinish, showThinkingContent, showAssistantRunFooter, pinnedDashboardEnabled, sendDiffFileAttachments, promptQueueEnabled
       if (typeof value !== "boolean") {
-        throw new Error(`INITIAL_SETTINGS_PRESET: "${key}" must be a boolean.`);
+        throw new Error(
+          `INITIAL_SETTINGS_PRESET: "${key}" must be a boolean.`,
+        );
       }
       switch (key) {
         case "compactOutputMode":

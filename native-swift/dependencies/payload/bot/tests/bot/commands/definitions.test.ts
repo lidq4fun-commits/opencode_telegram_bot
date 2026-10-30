@@ -22,8 +22,7 @@ describe("bot/commands/definitions", () => {
     expect(BUILT_IN_COMMAND_NAMES).toContain("reload");
   });
 
-  it("rejects legacy server configuration", async () => {
-    const { parseOpencodeServerVersion } = await import("../../../src/config.js");
-    expect(() => parseOpencodeServerVersion("v1")).toThrow("Only OpenCode V2");
+  it("rejects V1 configuration", async () => {
+    await expect(loadDefinitions("v1")).rejects.toThrow("Only OpenCode V2 is supported");
   });
 });

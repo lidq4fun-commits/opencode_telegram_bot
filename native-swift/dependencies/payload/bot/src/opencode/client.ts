@@ -41,13 +41,21 @@ export type OpencodeServerProbe =
   | { kind: "unauthorized" }
   | { kind: "none" };
 
-function readServerVersion(body: unknown): string | null {
+const PROBE_ROUTES: Record<OpencodeServerVersion, string> = {
+  v1: "global/health",
+  v2: "api/info",
+};
+
+function readServerVersion(version: OpencodeServerVersion, body: unknown): string | null {
   if (typeof body !== "object" || body === null) {
     return null;
   }
   const record = body as Record<string, unknown>;
   if (typeof record.version !== "string") {
     return null;
+  }
+  if (version === "v1") {
+    return record.healthy === true ? record.version : null;
   }
   return typeof record.pid === "number" ? record.version : null;
 }
@@ -59,15 +67,12 @@ function readServerVersion(body: unknown): string | null {
 export async function probeOpencodeServer(
   version: OpencodeServerVersion,
 ): Promise<OpencodeServerProbe> {
-  if (version !== "v2") {
-    return { kind: "none" };
-  }
   const baseUrl = config.opencode.apiUrl.endsWith("/")
     ? config.opencode.apiUrl
     : `${config.opencode.apiUrl}/`;
   try {
     const headers = authHeaders();
-    const response = await fetch(new URL("api/info", baseUrl), {
+    const response = await fetch(new URL(PROBE_ROUTES[version], baseUrl), {
       ...(headers ? { headers } : {}),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
@@ -78,7 +83,7 @@ export async function probeOpencodeServer(
     if (!response.ok || !contentType.includes("json")) {
       return { kind: "none" };
     }
-    const serverVersion = readServerVersion(await response.json());
+    const serverVersion = readServerVersion(version, await response.json());
     return serverVersion ? { kind: "found", version, serverVersion } : { kind: "none" };
   } catch {
     return { kind: "none" };

@@ -1,3 +1,4 @@
+import { ProjectDirectoryMissingError } from "../../app/services/project-directory-service.js";
 import type { Context } from "grammy";
 import type { AppContainer } from "../../app/bootstrap/app-container.js";
 import { getProjects } from "../../app/services/project-service.js";
@@ -107,7 +108,12 @@ export async function handleProjectSelect(ctx: Context, deps: ProjectSelectDeps)
   } catch (error) {
     deps.resetInteractions("project_select_error");
     logger.error("[Bot] Error selecting project:", error);
-    await failure(ctx, "projects.select_error");
+    if (error instanceof ProjectDirectoryMissingError) {
+      await ctx.answerCallbackQuery();
+      await ctx.reply(error.message);
+    } else {
+      await failure(ctx, "projects.select_error");
+    }
   }
 
   return true;

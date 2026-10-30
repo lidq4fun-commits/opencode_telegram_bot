@@ -3,7 +3,11 @@ import SwiftUI
 
 struct RootView: View {
     @ObservedObject var model: AppModel
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if model.setupRequired { SetupWizardView(model: model) }
+        else { mainContent }
+    }
+    var mainContent: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
@@ -15,7 +19,7 @@ struct RootView: View {
                 }.padding(.bottom, 20)
                 ForEach(AppModel.sidebarPageOrder, id: \.self) { page in
                     Button { model.page = page } label: {
-                        Label(model.pages[page], systemImage: ["square.grid.2x2", "person.crop.circle", "lock.shield", "cpu", "power", "terminal", "globe", "character.bubble"][page])
+                        Label(model.pages[page], systemImage: ["square.grid.2x2", "person.crop.circle", "lock.shield", "cpu", "power", "terminal", "globe", "character.bubble", "paperplane"][page])
                             .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                             .background(model.page == page ? Color.blue.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
                             .foregroundStyle(model.page == page ? Color.blue : Color.primary)
@@ -216,6 +220,8 @@ struct RootView: View {
                 Text(model.text("设置在下次登录时生效，凭据仅从钥匙串读取。", "Applies at next login; credentials are read only from Keychain."))
             case 5:
                 ConsoleView(model: model, console: model.console)
+            case 8:
+                TelegramClientView(client: model.telegram, english: model.settings.locale == "en")
             case 7:
                 Picker(model.text("界面语言", "Interface language"), selection: $model.settings.locale) { Text("简体中文").tag("zh"); Text("English").tag("en") }.frame(width: 260)
                     .onChange(of: model.settings.locale) { model.saveAction() }
@@ -284,15 +290,28 @@ struct RootView: View {
             HStack {
                 Text(model.pages[6]).font(.system(size: model.fontSize, weight: .semibold)); Spacer()
                 Menu {
-                    Button(model.text("重新连接", "Reconnect")) { model.action { try await model.connect() } }
+                    Button(model.text("重新连接", "Reconnect")) { model.startServices() }
                     Button(model.text("刷新网页", "Refresh page")) { model.webReloadRevision += 1 }
                     Button(model.text("在默认浏览器打开", "Open in default browser")) { if let url = model.webURL { NSWorkspace.shared.open(url) } }
                     Button(model.text("停止网页服务", "Stop web service")) { model.action { try await model.stopWeb() } }
                     Divider(); Text(model.message)
                 } label: { Text("⋯").font(.title2) }.menuStyle(.borderlessButton).frame(width: 36)
             }.padding(.horizontal, 8)
-            EmbeddedWeb(model: model)
-        }.padding(8).background(Color.black).environment(\.colorScheme, .dark).onAppear { if model.webURL == nil { model.action { try await model.connect() } } }
+            ZStack {
+                EmbeddedWeb(model: model)
+                if model.webURL == nil {
+                    VStack(spacing: 18) {
+                        if model.busy {
+                            ProgressView().controlSize(.large)
+                            Text(model.text("正在启动 OpenCode 服务…", "Starting OpenCode service…"))
+                        } else {
+                            Text(model.text("OpenCode 尚未连接", "OpenCode is not connected"))
+                            Button(model.text("启动服务并连接", "Start services and connect")) { model.startServices() }.buttonStyle(.borderedProminent)
+                        }
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.black)
+                }
+            }
+        }.padding(8).background(Color.black).environment(\.colorScheme, .dark)
     }
 }
 

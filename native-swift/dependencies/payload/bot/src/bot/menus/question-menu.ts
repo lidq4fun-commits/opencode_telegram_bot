@@ -9,6 +9,8 @@ import { t } from "../../i18n/index.js";
 import { editRenderedBotPart, sendRenderedBotPart } from "../messages/telegram-text.js";
 import type { TelegramRenderedPart, TelegramRichBlock } from "../render/types.js";
 
+const questionSends = new WeakMap<object, object>();
+
 const MAX_BUTTON_LENGTH = 60;
 const TELEGRAM_MESSAGE_LIMIT = 4096;
 const TRUNCATION_SUFFIX = "…";
@@ -74,10 +76,7 @@ export function syncQuestionInteractionState(
   });
 }
 
-export async function updateQuestionMessage(
-  ctx: Context,
-  deps: QuestionDataDeps,
-): Promise<void> {
+export async function updateQuestionMessage(ctx: Context, deps: QuestionDataDeps): Promise<void> {
   const { questionManager } = deps;
   const question = questionManager.getCurrentQuestion();
   if (!question) {
@@ -132,6 +131,15 @@ export async function showCurrentQuestion(
     return;
   }
 
+  const questionState = deps.interactionManager.getPayload("question");
+  const index = questionManager.getCurrentIndex();
+  const token = {};
+  questionSends.set(questionManager, token);
+  const isCurrent = () =>
+    questionSends.get(questionManager) === token &&
+    deps.interactionManager.getPayload("question") === questionState &&
+    questionManager.getCurrentIndex() === index;
+
   logger.debug(`[QuestionHandler] Showing question: ${question.header} - ${question.question}`);
 
   const part = formatQuestionDetailsPart(question, deps);
@@ -152,6 +160,13 @@ export async function showCurrentQuestion(
         reply_markup: keyboard,
       },
     });
+    if (!isCurrent()) {
+      safeBackgroundTask({
+        taskName: "question.removeStaleMessage",
+        task: () => bot.deleteMessage(chatId, messageId),
+      });
+      return;
+    }
     questionManager.addMessageId(messageId);
 
     logger.debug(`[QuestionHandler] Message sent, messageId=${messageId}`);
@@ -166,6 +181,7 @@ export async function showCurrentQuestion(
 
     summaryAggregator.stopTypingIndicator();
   } catch (err) {
+    if (!isCurrent()) return;
     questionManager.clear();
     clearQuestionInteraction("question_message_send_failed", deps);
 
@@ -315,10 +331,7 @@ function appendTruncationSuffix(segment: QuestionSegment): QuestionSegment {
  * Keeps the card within the Telegram message limit by dropping whole segments
  * from the tail, cutting only the last one that still partially fits.
  */
-function truncateQuestionSegments(
-  segments: QuestionSegment[],
-  limit: number,
-): QuestionSegment[] {
+function truncateQuestionSegments(segments: QuestionSegment[], limit: number): QuestionSegment[] {
   const separatorLength = 2;
   const result: QuestionSegment[] = [];
   let used = 0;
@@ -365,12 +378,15 @@ function truncateQuestionSegments(
   return result;
 }
 
-function formatQuestionDetailsPart(question: {
-  header: string;
-  question: string;
-  options: Array<{ label: string; description: string }>;
-  multiple?: boolean;
-}, deps: QuestionDataDeps): TelegramRenderedPart {
+function formatQuestionDetailsPart(
+  question: {
+    header: string;
+    question: string;
+    options: Array<{ label: string; description: string }>;
+    multiple?: boolean;
+  },
+  deps: QuestionDataDeps,
+): TelegramRenderedPart {
   const currentIndex = deps.questionManager.getCurrentIndex();
   const totalQuestions = deps.questionManager.getTotalQuestions();
   const progressText = totalQuestions > 0 ? `${currentIndex + 1}/${totalQuestions}` : "";

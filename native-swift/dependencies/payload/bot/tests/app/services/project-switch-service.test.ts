@@ -3,6 +3,7 @@ import type { Context } from "grammy";
 import type { ModelInfo } from "../../../src/app/types/model.js";
 
 const mocked = vi.hoisted(() => ({
+  ensureDirectoryMock: vi.fn(),
   setCurrentProjectMock: vi.fn(),
   clearSessionMock: vi.fn(),
   summaryAggregatorClearMock: vi.fn(),
@@ -15,17 +16,18 @@ const mocked = vi.hoisted(() => ({
   keyboardUpdateAgentMock: vi.fn(),
   getStoredAgentMock: vi.fn(() => "code"),
   resolveProjectAgentMock: vi.fn(async (agent: string) => agent),
-  getStoredModelMock: vi.fn(
-    (): ModelInfo => ({
-      providerID: "anthropic",
-      modelID: "claude-4",
-      variant: "default",
-    }),
-  ),
+  getStoredModelMock: vi.fn((): ModelInfo => ({
+    providerID: "anthropic",
+    modelID: "claude-4",
+    variant: "default",
+  })),
   formatVariantMock: vi.fn(() => "Default"),
   createMainKeyboardMock: vi.fn(() => ({ keyboard: [[{ text: "mock" }]] })),
 }));
 
+vi.mock("../../../src/app/services/project-directory-service.js", () => ({
+  ensureProjectDirectory: mocked.ensureDirectoryMock,
+}));
 vi.mock("../../../src/app/stores/settings-store.js", () => ({
   setCurrentProject: mocked.setCurrentProjectMock,
 }));
@@ -99,6 +101,13 @@ describe("app/services/project-switch-service", () => {
     });
     mocked.formatVariantMock.mockReset().mockReturnValue("Default");
     mocked.createMainKeyboardMock.mockReset().mockReturnValue({ keyboard: [[{ text: "mock" }]] });
+  });
+
+  it("preserves the current session when a selected directory is missing", async () => {
+    mocked.ensureDirectoryMock.mockRejectedValueOnce(new Error("missing directory"));
+    await expect(switchTestProject(createCtx())).rejects.toThrow("missing directory");
+    expect(mocked.setCurrentProjectMock).not.toHaveBeenCalled();
+    expect(mocked.clearSessionMock).not.toHaveBeenCalled();
   });
 
   it("should call state-clearing functions with correct arguments", async () => {

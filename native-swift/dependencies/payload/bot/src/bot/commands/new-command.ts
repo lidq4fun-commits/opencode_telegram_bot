@@ -1,3 +1,4 @@
+import { isProjectDirectoryMissing } from "../../app/services/project-directory-service.js";
 import type { Bot } from "grammy";
 import type { AppContainer } from "../../app/bootstrap/app-container.js";
 import { CommandContext, Context } from "grammy";
@@ -43,6 +44,11 @@ export async function newCommand(ctx: CommandContext<Context>, deps: NewCommandD
 
     if (!currentProject) {
       await ctx.reply(t("new.project_not_selected"));
+      return;
+    }
+
+    if (await isProjectDirectoryMissing(currentProject.worktree)) {
+      await ctx.reply(t("bot.project_directory_missing", { directory: currentProject.worktree }));
       return;
     }
 

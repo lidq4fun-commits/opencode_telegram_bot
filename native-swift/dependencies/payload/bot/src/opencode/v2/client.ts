@@ -1,5 +1,10 @@
-import type { Event, FilePartInput, OpencodeClient, TextPartInput } from "@opencode-ai/sdk/v2";
+import type { Event, FilePartInput, TextPartInput, SessionStatus } from "../types.js";
 import { OpenCode, type FormInfo, type OpenCodeClient } from "@opencode/client";
+import type {
+  IntegrationAttempt,
+  IntegrationAttemptStatus,
+  IntegrationInfo,
+} from "@opencode/client";
 import { Service } from "@opencode/client/service";
 import { createV2EventTranslator, type V1GlobalEvent } from "./events.js";
 import {
@@ -29,6 +34,7 @@ interface V2ClientOptions {
 export type V2InboxDelivery = "steer" | "queue";
 
 interface PromptParams {
+  directory?: string;
   sessionID: string;
   agent?: string;
   model?: { providerID: string; modelID: string };
@@ -44,13 +50,6 @@ interface PromptParams {
  * reaches them only after checking that the configured server is V2.
  */
 export interface V2ClientExtension {
-  provider: {
-    connectionStatus: (params: {
-      providerID: string;
-      modelID: string;
-      directory?: string;
-    }) => Promise<Result<"ready" | "needs_auth" | "unknown">>;
-  };
   session: {
     /** Sends a prompt into the session inbox and returns the id it waits under. */
     promptAsync: (
@@ -69,9 +68,36 @@ export interface V2ClientExtension {
      */
     reload: () => Promise<Result<true>>;
   };
+  integration: {
+    list: () => Promise<Result<IntegrationInfo[]>>;
+    listProviders: () => Promise<
+      Result<Array<{ id: string; name: string; integrationID?: string }>>
+    >;
+    connectOauth: (params: {
+      integrationID: string;
+      methodID: string;
+      answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+    }) => Promise<Result<IntegrationAttempt>>;
+    connectKey: (params: {
+      integrationID: string;
+      key: string;
+      answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+    }) => Promise<Result<true>>;
+    oauthStatus: (params: {
+      integrationID: string;
+      attemptID: string;
+    }) => Promise<Result<IntegrationAttemptStatus>>;
+    oauthComplete: (params: {
+      integrationID: string;
+      attemptID: string;
+      code?: string;
+    }) => Promise<Result<true>>;
+    oauthCancel: (params: { integrationID: string; attemptID: string }) => Promise<Result<true>>;
+  };
 }
 
 interface CommandParams {
+  directory?: string;
   sessionID: string;
   command: string;
   arguments?: string;
@@ -139,7 +165,7 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * events. Only that surface is implemented, plus the typed V2-only operations in
  * `V2ClientExtension`; everything else is absent.
  */
-export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient {
+export function createV2OpencodeClient(options: V2ClientOptions) {
   const client: OpenCodeClient = OpenCode.make({
     baseUrl: options.baseUrl,
     ...(options.headers ? { headers: options.headers } : {}),
@@ -362,7 +388,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
 
   const adapter = {
     global: {
-      health: () =>
+      health: (_params?: { directory?: string; signal?: AbortSignal }) =>
         run(async () => {
           const info = await client.server.info();
           return { healthy: true as const, version: info.version };
@@ -380,45 +406,79 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
         })(),
       }),
     },
-    provider: {
-      connectionStatus: (params: { providerID: string; modelID: string; directory?: string }) =>
-        run(async () => {
-          const [providers, integrations] = await Promise.all([
-            client.provider.list(location(params.directory)),
-            client.integration.list(location(params.directory)),
-          ]);
-          const provider = providers.data.find((item) => item.id === params.providerID);
-          if (provider?.settings && Reflect.get(provider.settings, "apiKey"))
-            return "ready" as const;
-          const integration = integrations.data.find(
-            (item) => item.id === (provider?.integrationID ?? params.providerID),
-          );
-          if (!integration || integration.methods.length === 0) return "unknown" as const;
-          if (integration.connections.some((item) => item.status?.status !== "needs_auth"))
-            return "ready" as const;
-          // OpenCode's free models do not require an account; do not block those.
-          if (params.providerID === "opencode") {
-            const models = await client.model.list(location(params.directory));
-            const model = models.data.find(
-              (item) => item.providerID === params.providerID && item.id === params.modelID,
-            );
-            if (
-              model?.enabled &&
-              model.cost.length > 0 &&
-              model.cost.every((cost) => cost.input === 0 && cost.output === 0)
-            )
-              return "ready" as const;
-          }
-          return "needs_auth" as const;
-        }),
-    },
     project: {
-      list: () => run(async () => (await client.project.list()).map(toV1Project)),
+      list: (_params?: { directory?: string }) => run(async () => (await client.project.list()).map(toV1Project)),
     },
     location: {
       reload: () =>
         run(async () => {
           await client.location.reload();
+          return true as const;
+        }),
+    },
+    integration: {
+      list: () => run(async () => (await client.integration.list()).data),
+      listProviders: () =>
+        run(async () =>
+          (await client.provider.list()).data.map((provider) => ({
+            id: provider.id,
+            name: provider.name,
+            ...(provider.integrationID ? { integrationID: provider.integrationID } : {}),
+          })),
+        ),
+      connectOauth: (params: {
+        integrationID: string;
+        methodID: string;
+        answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+      }) =>
+        run(
+          async () =>
+            (
+              await client.integration.oauth.connect({
+                integrationID: params.integrationID,
+                methodID: params.methodID,
+                ...(params.answer ? { answer: params.answer } : {}),
+              })
+            ).data,
+        ),
+      oauthStatus: (params: { integrationID: string; attemptID: string }) =>
+        run(
+          async () =>
+            (
+              await client.integration.oauth.status({
+                integrationID: params.integrationID,
+                attemptID: params.attemptID,
+              })
+            ).data,
+        ),
+      connectKey: (params: {
+        integrationID: string;
+        key: string;
+        answer?: Record<string, string | number | boolean | ReadonlyArray<string>>;
+      }) =>
+        run(async () => {
+          await client.integration.connect.key({
+            integrationID: params.integrationID,
+            key: params.key,
+            ...(params.answer ? { answer: params.answer } : {}),
+          });
+          return true as const;
+        }),
+      oauthComplete: (params: { integrationID: string; attemptID: string; code?: string }) =>
+        run(async () => {
+          await client.integration.oauth.complete({
+            integrationID: params.integrationID,
+            attemptID: params.attemptID,
+            ...(params.code !== undefined ? { code: params.code } : {}),
+          });
+          return true as const;
+        }),
+      oauthCancel: (params: { integrationID: string; attemptID: string }) =>
+        run(async () => {
+          await client.integration.oauth.cancel({
+            integrationID: params.integrationID,
+            attemptID: params.attemptID,
+          });
           return true as const;
         }),
     },
@@ -446,7 +506,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
           });
           return result.data.map(toV1Session);
         }),
-      get: (params: { sessionID: string }) =>
+      get: (params: { sessionID: string; directory?: string }) =>
         run(async () => toV1Session(await client.session.get({ sessionID: params.sessionID }))),
       create: (params: { directory: string; title?: string }) =>
         run(async () =>
@@ -457,7 +517,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
             }),
           ),
         ),
-      update: (params: { sessionID: string; title?: string }) =>
+      update: (params: { sessionID: string; title?: string; directory?: string }) =>
         run(async () => {
           await client.session.update({
             sessionID: params.sessionID,
@@ -465,21 +525,21 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
           });
           return toV1Session(await client.session.get({ sessionID: params.sessionID }));
         }),
-      delete: (params: { sessionID: string }) =>
+      delete: (params: { sessionID: string; directory?: string }) =>
         run(async () => {
           await client.session.remove({ sessionID: params.sessionID });
           return true;
         }),
-      status: () =>
+      status: (_params?: { directory?: string }) =>
         run(async () => {
           const active = await client.session.active();
           return Object.fromEntries(
             Object.keys(active).map((id) => [id, { type: "busy" as const }]),
-          );
+          ) as Record<string, SessionStatus>;
         }),
-      messages: (params: { sessionID: string; limit?: number }) =>
+      messages: (params: { sessionID: string; limit?: number; directory?: string }) =>
         run(() => sessionMessages(params.sessionID, params.limit)),
-      message: (params: { sessionID: string; messageID: string }) =>
+      message: (params: { sessionID: string; messageID: string; directory?: string }) =>
         run(async () => {
           const [session, message] = await Promise.all([
             client.session.get({ sessionID: params.sessionID }),
@@ -528,21 +588,21 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
           await runCommand(params);
           return undefined;
         }),
-      abort: (params: { sessionID: string }) =>
+      abort: (params: { sessionID: string; directory?: string }, _options?: { signal?: AbortSignal }) =>
         run(async () => {
           await client.session.interrupt({ sessionID: params.sessionID });
           return true;
         }),
-      summarize: (params: { sessionID: string }) =>
+      summarize: (params: { sessionID: string; directory?: string; providerID?: string; modelID?: string }) =>
         run(async () => {
           await client.session.compact({ sessionID: params.sessionID, delivery: "queue" });
           return true;
         }),
-      diff: (params: { sessionID: string }) =>
+      diff: (params: { sessionID: string; directory?: string }) =>
         run(async () =>
           (await client.session.diff({ sessionID: params.sessionID })).map(toV1FileDiff),
         ),
-      fork: (params: { sessionID: string; messageID?: string }) =>
+      fork: (params: { sessionID: string; messageID?: string; directory?: string }) =>
         run(async () =>
           toV1Session(
             await client.session.fork({
@@ -551,7 +611,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
             }),
           ),
         ),
-      revert: (params: { sessionID: string; messageID: string }) =>
+      revert: (params: { sessionID: string; messageID: string; directory?: string }) =>
         run(async () => {
           await client.session.revert.stage({
             sessionID: params.sessionID,
@@ -561,7 +621,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
         }),
     },
     config: {
-      providers: () =>
+      providers: (_params?: { directory?: string }) =>
         run(async () => {
           const [models, providers, defaultModel] = await Promise.all([
             client.model.list(),
@@ -613,7 +673,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
             return toV1Question(form);
           });
         }),
-      reply: (params: { requestID: string; answers?: string[][]; sessionID?: string }) =>
+      reply: (params: { requestID: string; answers?: string[][]; sessionID?: string; directory?: string }) =>
         run(async () => {
           const form = await findForm(params.requestID, params.sessionID);
           await client.session.form.reply({
@@ -624,7 +684,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
           forms.delete(form.id);
           return true;
         }),
-      reject: (params: { requestID: string; sessionID?: string }) =>
+      reject: (params: { requestID: string; sessionID?: string; directory?: string }) =>
         run(async () => {
           const form = await findForm(params.requestID, params.sessionID);
           await client.session.form.cancel({ sessionID: form.sessionID, formID: form.id });
@@ -646,6 +706,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
         reply?: "once" | "always" | "reject";
         message?: string;
         sessionID?: string;
+        directory?: string;
       }) =>
         run(async () => {
           const sessionID = params.sessionID ?? permissionSessions.get(params.requestID);
@@ -665,7 +726,7 @@ export function createV2OpencodeClient(options: V2ClientOptions): OpencodeClient
   };
 
   // The adapter implements exactly the part of the V1 client surface the bot calls.
-  return adapter as unknown as OpencodeClient;
+  return { ...adapter, path: undefined };
 }
 
 /**

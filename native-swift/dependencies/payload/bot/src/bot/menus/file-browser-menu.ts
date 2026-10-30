@@ -185,6 +185,8 @@ function buildOpenBrowseKeyboard(
   hasParent: boolean,
   page: number,
   totalCount: number,
+  selectButtonText?: string,
+  cancelButtonText?: string,
 ): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   const totalPages = Math.max(1, Math.ceil(totalCount / MAX_ENTRIES_PER_PAGE));
@@ -220,14 +222,22 @@ function buildOpenBrowseKeyboard(
   }
 
   keyboard
-    .text(t("open.select_current"), encodeOpenPathForCallback(OPEN_CALLBACK_SELECT_PREFIX, currentPath))
+    .text(
+      selectButtonText ?? t("open.select_current"),
+      encodeOpenPathForCallback(OPEN_CALLBACK_SELECT_PREFIX, currentPath),
+    )
     .row();
-  appendInlineMenuCancelButton(keyboard, "open");
+  appendInlineMenuCancelButton(keyboard, "open", cancelButtonText);
 
   return keyboard;
 }
 
-export async function renderOpenBrowseView(dirPath: string, page: number = 0) {
+export async function renderOpenBrowseView(
+  dirPath: string,
+  page: number = 0,
+  selectButtonText?: string,
+  cancelButtonText?: string,
+) {
   const result = await scanDirectory(dirPath, page);
 
   if ("error" in result) {
@@ -243,11 +253,13 @@ export async function renderOpenBrowseView(dirPath: string, page: number = 0) {
       result.hasParent,
       result.page,
       result.totalCount,
+      selectButtonText,
+      cancelButtonText,
     ),
   };
 }
 
-export function buildOpenRootsKeyboard(): InlineKeyboard {
+export function buildOpenRootsKeyboard(cancelButtonText?: string): InlineKeyboard {
   const keyboard = new InlineKeyboard();
 
   for (const root of getBrowserRoots()) {
@@ -255,7 +267,7 @@ export function buildOpenRootsKeyboard(): InlineKeyboard {
     keyboard.text(label, encodeOpenPathForCallback(OPEN_CALLBACK_NAV_PREFIX, root)).row();
   }
 
-  appendInlineMenuCancelButton(keyboard, "open");
+  appendInlineMenuCancelButton(keyboard, "open", cancelButtonText);
   return keyboard;
 }
 

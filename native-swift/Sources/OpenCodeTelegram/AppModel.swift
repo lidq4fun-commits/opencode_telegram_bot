@@ -3,7 +3,13 @@ import SwiftUI
 
 @MainActor final class AppModel: ObservableObject {
     @Published var settings = Settings()
-    @Published var page = 0
+    @Published var page = 6
+    @Published var setupRequired = !SetupRules.completed()
+    @Published var setupStep: SetupStep = .telegram
+    @Published var setupEnginePath = ""
+    @Published var setupBotName = ""
+    private var verifiedSetupToken = ""
+    private var verifiedSetupUserID = ""
     @Published var fontSize: Double = UserDefaults.standard.object(forKey: "interfaceFontSize") as? Double ?? 15 {
         didSet { UserDefaults.standard.set(fontSize, forKey: "interfaceFontSize") }
     }
@@ -30,11 +36,13 @@ import SwiftUI
     @Published var appStartup = StartupManager.enabled("app")
     @Published var botStartup = StartupManager.enabled("bot")
     let console = CLIConsole()
+    let telegram = TelegramClient()
     private var writable = false
 
     init(loadSettings: Bool = true) {
         settings.locale = UserDefaults.standard.string(forKey: "interfaceLocale") ?? "zh"
         guard loadSettings else { return }
+        if !CommandLine.arguments.contains("--start-silent") { telegram.startAutomatically() }
         busy = true
         Task { [self] in
             defer { busy = false }
@@ -49,6 +57,9 @@ import SwiftUI
                 refreshRuntime()
                 monitor = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                     Task { @MainActor in self?.refreshRuntime() }
+                }
+                if !setupRequired && !CommandLine.arguments.contains("--start-silent") {
+                    try await startDesktopServices()
                 }
             } catch { self.error = error.localizedDescription }
         }
@@ -70,12 +81,82 @@ import SwiftUI
         }
         guard writable else { throw AppFailure.message("Keychain settings are not available; startup was cancelled.") }
     }
-    static let sidebarPageOrder = [0, 6, 1, 2, 3, 4, 5, 7]
+    static let sidebarPageOrder = [6, 0, 8, 1, 2, 3, 4, 5, 7]
     var pages: [String] {
         [text("概览", "Overview"), text("机器人绑定", "Bot Binding"), text("加密设置", "Encryption"),
          text("OpenCode 引擎", "OpenCode Engine"), text("启动设置", "Startup Settings"), "Bot CLI",
-         text("OpenCode 网页端", "OpenCode Web"), text("语言与外观", "Language & Appearance")]
+          text("OpenCode 网页端", "OpenCode Web"), text("语言与外观", "Language & Appearance"), text("Telegram 客户端", "Telegram Client")]
     }
+    var setupBindingVerified: Bool {
+        !setupBotName.isEmpty && verifiedSetupToken == settings.botToken && verifiedSetupUserID == settings.allowedUserID
+    }
+    var setupCanContinue: Bool {
+        switch setupStep {
+        case .telegram: return telegram.identity != nil && !telegram.working
+        case .bot: return setupBindingVerified && SetupRules.botConfigured(settings)
+        case .encryption: return SetupRules.encryptionReady(settings)
+        case .engine:
+            return !setupEnginePath.isEmpty && engines.contains { $0.path == setupEnginePath } &&
+                telegram.identity != nil && setupBindingVerified && SetupRules.encryptionReady(settings)
+        }
+    }
+    func verifySetupBot() {
+        action {
+            self.error = ""
+            let token = self.settings.botToken, userID = self.settings.allowedUserID
+            let bot = try await BotBindingVerifier.verify(token: token, userID: userID)
+            guard self.settings.botToken == token, self.settings.allowedUserID == userID else {
+                throw AppFailure.message(self.text("绑定信息已更改，请重新验证。", "Binding fields changed; verify again."))
+            }
+            try self.save()
+            self.verifiedSetupToken = token; self.verifiedSetupUserID = userID; self.setupBotName = bot.username
+        }
+    }
+    func previousSetupStep() {
+        guard !busy, let previous = SetupStep(rawValue: setupStep.rawValue - 1) else { return }
+        error = ""; setupStep = previous
+    }
+    func advanceSetup() {
+        guard setupRequired, setupCanContinue, !busy else { return }
+        error = ""
+        switch setupStep {
+        case .telegram:
+            if settings.allowedUserID.isEmpty, let identity = telegram.identity { settings.allowedUserID = String(identity.id) }
+            setupStep = .bot
+        case .bot: setupStep = .encryption
+        case .encryption:
+            do { try save() } catch { self.error = error.localizedDescription; return }
+            setupStep = .engine
+            scanEngines()
+        case .engine:
+            let selected = setupEnginePath
+            action {
+                guard let candidate = self.engines.first(where: { $0.path == selected }) else { throw AppFailure.message("Select a valid OpenCode V2 environment.") }
+                let probe = try await Runtime.run(URL(fileURLWithPath: candidate.path), ["--version"], settings: self.settings, timeout: 15)
+                guard probe.code == 0, EngineManager.versionNumber(probe.output) != nil else {
+                    throw AppFailure.message(self.text("所选环境已失效，请重新扫描。", "The selected environment is no longer valid; rescan."))
+                }
+                self.message = self.text("正在启动 OpenCode 与 Bot…", "Starting OpenCode and Bot…")
+                try await self.applyEngine(path: candidate.path, version: candidate.apiVersion)
+                try await self.startDesktopServices(connectWeb: false)
+                SetupRules.markCompleted()
+                UserDefaults.standard.set(self.settings.locale, forKey: "interfaceLocale")
+                self.setupRequired = false; self.page = 6
+                self.verifiedSetupToken = ""; self.verifiedSetupUserID = ""
+            }
+        }
+    }
+    private func startDesktopServices(connectWeb: Bool = true) async throws {
+        page = 6
+        if connectWeb { try await connect(reconfigureLocal: false) }
+        refreshRuntime()
+        if SetupRules.shouldStartBot(settings, running: botRunning) {
+            _ = try await Runtime.bot(["start", "--daemon", "--mode", "installed"], settings: settings)
+            refreshRuntime()
+        }
+        savedEncryption = encryptionSignature
+    }
+    func startServices() { action { try await self.startDesktopServices() } }
     func save() throws {
         guard writable else { throw AppFailure.message(text("钥匙串未能读取，禁止覆盖配置。", "Keychain could not be read; settings will not be overwritten.")) }
         if settings.encryptionEnabled && settings.encryptionPassword.count < 12 {
@@ -119,23 +200,26 @@ import SwiftUI
         } else { botRunning = false }
         refreshLogs()
     }
-    func connect() async throws {
+    func connect(reconfigureLocal: Bool = true) async throws {
         try save()
         guard let configured = URL(string: settings.serverURL), ["http", "https"].contains(configured.scheme ?? "") else {
             throw AppFailure.message(text("服务器地址无效。", "Invalid server URL."))
         }
-        if ["127.0.0.1", "localhost", "::1"].contains(configured.host ?? "") {
+        if reconfigureLocal && ["127.0.0.1", "localhost", "::1"].contains(configured.host ?? "") {
             try await stopWeb()
             try await EnginePort.release(port: configured.port ?? 4096, settings: settings)
         }
         if settings.apiVersion == "v2", ["127.0.0.1", "localhost", "::1"].contains(configured.host ?? "") {
+            let configureService = reconfigureLocal || settings.serverPassword.isEmpty
             if settings.serverPassword.isEmpty {
                 settings.serverPassword = UUID().uuidString + UUID().uuidString
                 try save()
             }
-            _ = try await Runtime.engineCommand(["service", "unset", "disabled"], settings: settings)
-            _ = try await Runtime.engineCommand(["service", "set", "password", settings.serverPassword], settings: settings)
-            _ = try await Runtime.engineCommand(["service", "set", "env", "OPENCODE_SERVER_USERNAME", "opencode"], settings: settings)
+            if configureService {
+                _ = try await Runtime.engineCommand(["service", "unset", "disabled"], settings: settings)
+                _ = try await Runtime.engineCommand(["service", "set", "password", settings.serverPassword], settings: settings)
+                _ = try await Runtime.engineCommand(["service", "set", "env", "OPENCODE_SERVER_USERNAME", "opencode"], settings: settings)
+            }
             let output = try await Runtime.engineCommand(["service", "start"], settings: settings)
             guard let actual = output.components(separatedBy: .newlines).compactMap({ URL(string: $0.trimmingCharacters(in: .whitespaces)) }).last(where: { $0.scheme == "http" && ["127.0.0.1", "localhost", "::1"].contains($0.host ?? "") }) else {
                 throw AppFailure.message(text("服务未返回有效地址。", "Service did not return a valid endpoint."))
@@ -365,6 +449,7 @@ import SwiftUI
         if !added.isEmpty { logs = String((logs + added).suffix(65536)) }
     }
     func cleanup() async throws {
+        await telegram.shutdown()
         noticeTask?.cancel()
         monitor?.invalidate(); monitor = nil
         console.stop()

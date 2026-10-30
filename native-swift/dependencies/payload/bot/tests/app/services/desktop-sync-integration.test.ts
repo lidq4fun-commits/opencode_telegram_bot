@@ -12,10 +12,22 @@ const mocked = vi.hoisted(() => ({
   session: { id: "ses_phone", directory: "/project", title: "Phone" } as SessionInfo | null,
   model: { providerID: "provider", modelID: "phone", variant: "high" } as ModelInfo,
   busy: false,
+  directoryMissing: false,
   getSession: vi.fn(),
   getProject: vi.fn(),
   attach: vi.fn(),
   notify: vi.fn(),
+}));
+vi.mock("../../../src/app/services/project-directory-service.js", () => ({
+  ensureProjectDirectory: async () => {
+    if (mocked.directoryMissing) {
+      const { ProjectDirectoryMissingError } =
+        await import("../../../src/app/services/project-directory-service.js");
+      throw new ProjectDirectoryMissingError("/project");
+    }
+  },
+  isProjectDirectoryMissing: async () => mocked.directoryMissing,
+  ProjectDirectoryMissingError: class extends Error {},
 }));
 vi.mock("node:fs/promises", () => ({
   default: {
@@ -45,6 +57,7 @@ vi.mock("../../../src/app/stores/settings-store.js", () => ({
   setCurrentProject: (project: ProjectInfo) => {
     mocked.project = project;
   },
+  getHiddenProjects: () => [],
 }));
 vi.mock("../../../src/app/services/session-service.js", () => ({
   getCurrentSession: () => mocked.session,
@@ -126,6 +139,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mocked.files.clear();
   mocked.busy = false;
+  mocked.directoryMissing = false;
   mocked.project = { id: "project", worktree: "/project", name: "Project" };
   mocked.session = { id: "ses_phone", directory: "/project", title: "Phone" };
   mocked.model = { providerID: "provider", modelID: "phone", variant: "high" };
@@ -143,6 +157,46 @@ afterEach(async () => {
 });
 
 describe("desktop synchronization single-writer integration", () => {
+  it("keeps heartbeats fresh for over six seconds without acknowledging a pending attach", async () => {
+    let finish!: () => void;
+    mocked.attach.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const id = command({ sessionID: "ses_desktop" });
+    await vi.advanceTimersByTimeAsync(500);
+    for (let tick = 0; tick < 5; tick++) {
+      await vi.advanceTimersByTimeAsync(2000);
+      const state = readState() as SyncState & { updatedAt: number };
+      expect(Date.now() - state.updatedAt).toBeLessThan(2500);
+      expect(state.acknowledgements.some((ack) => ack.id === id)).toBe(false);
+      expect(mocked.attach).toHaveBeenCalledTimes(1);
+    }
+    finish();
+    await waitForDesktopSyncIdle();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(readState().acknowledgements).toContainEqual({ id, reason: null });
+  });
+
+  it("reports a missing project without replacing the saved conversation", async () => {
+    const before = readState();
+    mocked.directoryMissing = true;
+    const id = command({ kind: "prompt", sessionID: "ses_phone", directory: "/project" });
+    await vi.advanceTimersByTimeAsync(500);
+    const next = readState() as SyncState & { projectUnavailable: boolean };
+    expect(next.projectUnavailable).toBe(true);
+    expect(next.currentSession).toEqual(before.currentSession);
+    expect(next.acknowledgements).toContainEqual({ id, reason: "project_missing" });
+    expect(mocked.attach).not.toHaveBeenCalled();
+    mocked.directoryMissing = false;
+    await vi.advanceTimersByTimeAsync(500);
+    expect((readState() as SyncState & { projectUnavailable: boolean }).projectUnavailable).toBe(
+      false,
+    );
+  });
+
   it("switches project and attaches the desktop session, acknowledging without a mobile echo", async () => {
     const before = readState(),
       id = command({ sessionID: "ses_desktop" });

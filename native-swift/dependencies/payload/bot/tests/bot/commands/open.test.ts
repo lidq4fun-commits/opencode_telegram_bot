@@ -20,6 +20,7 @@ const mocked = vi.hoisted(() => ({
   getBrowserRootsMock: vi.fn(() => ["/home/user"]),
   isWithinAllowedRootMock: vi.fn(() => true),
   isAllowedRootMock: vi.fn(() => false),
+  isDirectoryWritableMock: vi.fn().mockResolvedValue(true),
   ensureActiveInlineMenuMock: vi.fn().mockResolvedValue(true),
   isForegroundBusyMock: vi.fn(() => false),
   replyBusyBlockedMock: vi.fn().mockResolvedValue(undefined),
@@ -43,6 +44,7 @@ vi.mock("../../../src/app/services/file-browser-service.js", () => ({
   getBrowserRoots: mocked.getBrowserRootsMock,
   isWithinAllowedRoot: mocked.isWithinAllowedRootMock,
   isAllowedRoot: mocked.isAllowedRootMock,
+  isDirectoryWritable: mocked.isDirectoryWritableMock,
 }));
 
 vi.mock("../../../src/bot/menus/inline-menu.js", () => ({
@@ -77,6 +79,7 @@ vi.mock("../../../src/utils/logger.js", () => ({
 }));
 
 import { openCommand } from "../../../src/bot/commands/open-command.js";
+import { createProjectCommand } from "../../../src/bot/commands/create-project-command.js";
 import { handleOpenCallback } from "../../../src/bot/callbacks/file-browser-callback-handler.js";
 import { clearOpenPathIndex } from "../../../src/bot/menus/file-browser-menu.js";
 import { createTestAppContainer } from "../../helpers/app-container.js";
@@ -100,7 +103,7 @@ function createCallbackContext(data: string, messageId: number = 42): Context {
     answerCallbackQuery: vi.fn().mockResolvedValue(undefined),
     editMessageText: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
-    reply: vi.fn().mockResolvedValue(undefined),
+    reply: vi.fn().mockResolvedValue({ message_id: 77 }),
     api: {},
   } as unknown as Context;
 }
@@ -126,11 +129,22 @@ function makeScanResult(
 
 // --- Tests ---
 
-function createDeps() {
+function createDeps(createProject: boolean = false) {
   return createTestAppContainer({
     interactionManager: {
       start: mocked.interactionStartMock,
-      getSnapshot: vi.fn(() => null),
+      getSnapshot: vi.fn(() =>
+        createProject
+          ? {
+              kind: "inline",
+              expectedInput: "callback",
+              metadata: { createProject: true },
+              allowedCommands: [],
+              createdAt: Date.now(),
+              expiresAt: null,
+            }
+          : null,
+      ),
       clear: vi.fn(),
     } as never,
   });
@@ -148,6 +162,7 @@ describe("open command", () => {
     mocked.getBrowserRootsMock.mockReset().mockReturnValue(["/home/user"]);
     mocked.isWithinAllowedRootMock.mockReset().mockReturnValue(true);
     mocked.isAllowedRootMock.mockReset().mockReturnValue(false);
+    mocked.isDirectoryWritableMock.mockReset().mockResolvedValue(true);
     mocked.ensureActiveInlineMenuMock.mockReset().mockResolvedValue(true);
     mocked.isForegroundBusyMock.mockReset().mockReturnValue(false);
     mocked.getProjectByWorktreeMock.mockReset().mockResolvedValue({
@@ -179,6 +194,25 @@ describe("open command", () => {
           kind: "inline",
           expectedInput: "callback",
           metadata: expect.objectContaining({ menuKind: "open" }),
+        }),
+      );
+    });
+
+    it("should label the select button and mark the interaction when creating a project", async () => {
+      mocked.scanDirectoryMock.mockResolvedValue(makeScanResult([], "/home/user"));
+
+      const ctx = createCommandContext();
+      await createProjectCommand(ctx as never, createDeps());
+
+      const replyCall = defined((ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0]);
+      const keyboard = replyCall[1]?.reply_markup;
+      const labels = (keyboard?.inline_keyboard ?? [])
+        .flat()
+        .map((button: { text: string }) => button.text);
+      expect(labels).toContain(t("create_project.select_here"));
+      expect(mocked.interactionStartMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ menuKind: "open", createProject: true }),
         }),
       );
     });
@@ -348,6 +382,46 @@ describe("open command", () => {
         expect.objectContaining({ reply_markup: expect.anything() }),
       );
       expect(ctx.deleteMessage).toHaveBeenCalled();
+    });
+
+    it("should ask for a folder name in create mode instead of switching", async () => {
+      const parentPath = "/home/user";
+      const ctx = createCallbackContext(`open:sel:${parentPath}`);
+
+      const result = await handleOpenCallback(ctx, createDeps(true));
+
+      expect(result).toBe(true);
+      expect(mocked.switchToProjectMock).not.toHaveBeenCalled();
+      expect(mocked.interactionStartMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "custom",
+          expectedInput: "text",
+          metadata: expect.objectContaining({
+            flow: "create_project",
+            parentPath,
+            messageId: 77,
+          }),
+        }),
+      );
+      expect(ctx.reply).toHaveBeenCalledWith(
+        t("create_project.prompt", { path: "~" }),
+        expect.objectContaining({ reply_markup: expect.anything() }),
+      );
+    });
+
+    it("should refuse to create in a non-writable folder", async () => {
+      mocked.isDirectoryWritableMock.mockResolvedValue(false);
+      const ctx = createCallbackContext("open:sel:/Users");
+
+      const result = await handleOpenCallback(ctx, createDeps(true));
+
+      expect(result).toBe(true);
+      expect(ctx.answerCallbackQuery).toHaveBeenCalledWith({
+        text: t("create_project.permission_denied"),
+        show_alert: true,
+      });
+      expect(ctx.reply).not.toHaveBeenCalled();
+      expect(mocked.interactionStartMock).not.toHaveBeenCalled();
     });
 
     it("should show error on select failure", async () => {

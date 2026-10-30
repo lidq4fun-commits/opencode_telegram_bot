@@ -167,7 +167,7 @@ describe("runtime/bootstrap", () => {
     expect(updated).toContain("OPENCODE_SERVER_PASSWORD=service-password");
   });
 
-  it("offers only V2 on first setup and re-runs", () => {
+  it("offers V2 on a first setup and the saved version on a re-run", () => {
     expect(getWizardServerVersionDefault(null)).toBe("v2");
     expect(getWizardServerVersionDefault("OPENCODE_SERVER_VERSION=v2\n")).toBe("v2");
     expect(getWizardServerVersionDefault("OPENCODE_SERVER_VERSION=v1\n")).toBe("v2");

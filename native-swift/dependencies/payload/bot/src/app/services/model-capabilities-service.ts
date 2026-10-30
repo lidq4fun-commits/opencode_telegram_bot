@@ -1,6 +1,6 @@
 import { logger } from "../../utils/logger.js";
 import { readProvidersWhenListed } from "./model-selection-service.js";
-import type { Model } from "@opencode-ai/sdk/v2";
+import type { Model } from "../../opencode/types.js";
 
 interface ModelCapabilitiesCache {
   [key: string]: Model["capabilities"];

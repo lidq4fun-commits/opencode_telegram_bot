@@ -10,6 +10,11 @@ import type {
   ProviderInfo,
 } from "../types/model.js";
 import path from "node:path";
+import {
+  readModelCatalogCache,
+  writeModelCatalogCache,
+  type ModelCatalogCacheProvider,
+} from "./model-catalog-cache.js";
 
 interface OpenCodeModelState {
   favorite?: Array<{ providerID?: string; modelID?: string }>;
@@ -38,6 +43,7 @@ type ProvidersResponse = Awaited<ReturnType<typeof fetchProvidersList>>;
 
 const MODEL_CATALOG_CACHE_TTL_MS = 10 * 60 * 1000;
 const MODEL_CATALOG_WARMUP_MS = 60 * 1000;
+const MODEL_CATALOG_SEED_TTL_MS = 30 * 1000;
 const EXPECTED_PROVIDERS_WAIT_MS = 10 * 1000;
 const EXPECTED_PROVIDERS_POLL_INTERVAL_MS = 500;
 
@@ -47,6 +53,8 @@ let cachedProviders: ProviderInfo[] | null = null;
 let cachedModelsByProvider: Map<string, FavoriteModel[]> | null = null;
 let cachedCatalogComplete = false;
 let modelCatalogCacheExpiresAt = 0;
+let modelCatalogSeedExpiresAt = 0;
+let modelCatalogSeedRefreshInFlight = false;
 let modelCatalogFetchInFlight: Promise<ModelCatalogReadResult> | null = null;
 let modelCatalogWaitedFetchInFlight: Promise<ModelCatalogReadResult> | null = null;
 let modelCatalogWarmupEndsAt = 0;
@@ -116,6 +124,87 @@ function clearModelCatalogCache(): void {
   cachedModelsByProvider = null;
   cachedCatalogComplete = false;
   modelCatalogCacheExpiresAt = 0;
+  modelCatalogSeedExpiresAt = 0;
+}
+
+function applyCatalogEntries(
+  providers: ReadonlyArray<{ id: string; name: string; models: ReadonlyArray<string> }>,
+): void {
+  const validModelKeys = new Set<string>();
+  const allModels: FavoriteModel[] = [];
+  const providerInfos: ProviderInfo[] = [];
+  const modelsByProvider = new Map<string, FavoriteModel[]>();
+
+  for (const provider of providers) {
+    const providerModels: FavoriteModel[] = [];
+    for (const modelID of provider.models) {
+      validModelKeys.add(getModelKey(provider.id, modelID));
+      allModels.push({ providerID: provider.id, modelID });
+      providerModels.push({ providerID: provider.id, modelID });
+    }
+
+    providerModels.sort((a, b) => a.modelID.localeCompare(b.modelID));
+    modelsByProvider.set(provider.id, providerModels);
+    providerInfos.push({ id: provider.id, name: provider.name || provider.id, modelCount: providerModels.length });
+  }
+
+  providerInfos.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  cachedValidModelKeys = validModelKeys;
+  cachedAllModels = allModels;
+  cachedProviders = providerInfos;
+  cachedModelsByProvider = modelsByProvider;
+  cachedCatalogComplete = true;
+}
+
+/**
+ * Fills the in-memory catalog from the file written by the previous run, so the model menu is
+ * usable immediately after a restart. The list is served for a short window while a real
+ * refresh runs in the background; it never counts as the fresh 10-minute cache.
+ * @returns true when a usable catalog was seeded
+ */
+export async function seedModelCatalogFromDisk(): Promise<boolean> {
+  const payload = await readModelCatalogCache();
+  if (!payload) {
+    return false;
+  }
+
+  const providers = payload.providers.map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    models: provider.models.filter((modelID): modelID is string => typeof modelID === "string"),
+  }));
+  applyCatalogEntries(providers);
+
+  if (!cachedValidModelKeys || cachedValidModelKeys.size === 0) {
+    clearModelCatalogCache();
+    return false;
+  }
+
+  modelCatalogCacheExpiresAt = 0;
+  modelCatalogSeedExpiresAt = Date.now() + MODEL_CATALOG_SEED_TTL_MS;
+  logger.info(
+    `[ModelManager] Seeded ${cachedValidModelKeys.size} models from the saved catalog; refreshing in the background`,
+  );
+  refreshSeededCatalogInBackground();
+  return true;
+}
+
+function refreshSeededCatalogInBackground(): void {
+  if (modelCatalogSeedRefreshInFlight) {
+    return;
+  }
+
+  modelCatalogSeedRefreshInFlight = true;
+  void readModelCatalog({ force: true, waitForExpectedProviders: true })
+    .catch((error: unknown) => {
+      logger.debug("[ModelManager] Background catalog refresh failed", error);
+    })
+    .finally(() => {
+      modelCatalogSeedRefreshInFlight = false;
+      if (cachedCatalogComplete) {
+        modelCatalogSeedExpiresAt = 0;
+      }
+    });
 }
 
 /**
@@ -245,7 +334,19 @@ export function readProvidersWhenListed(providerID?: string): Promise<ProvidersR
 async function readModelCatalog(options?: {
   force?: boolean | undefined;
   waitForExpectedProviders?: boolean | undefined;
+  ignoreSeed?: boolean | undefined;
 }): Promise<ModelCatalogReadResult> {
+  if (
+    !options?.ignoreSeed &&
+    !options?.force &&
+    cachedValidModelKeys &&
+    Date.now() < modelCatalogSeedExpiresAt
+  ) {
+    logger.debug("[ModelManager] Serving the seeded model catalog while it refreshes");
+    refreshSeededCatalogInBackground();
+    return { validModelKeys: cachedValidModelKeys, isStale: false, isComplete: true };
+  }
+
   if (!options?.force && cachedValidModelKeys && Date.now() < modelCatalogCacheExpiresAt) {
     logger.debug(
       `[ModelManager] Model catalog cache hit: models=${cachedValidModelKeys.size}, ttlMs=${modelCatalogCacheExpiresAt - Date.now()}`,
@@ -336,6 +437,13 @@ async function readModelCatalog(options?: {
         logger.debug(
           `[ModelManager] Model catalog refreshed: providers=${response.data.providers.length}, models=${validModelKeys.size}`,
         );
+        // Remember the complete list so the next start can show a menu before the server is up.
+        const cacheProviders: ModelCatalogCacheProvider[] = providers.map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          models: (modelsByProvider.get(provider.id) ?? []).map((model) => model.modelID),
+        }));
+        void writeModelCatalogCache(cacheProviders);
       } else {
         logger.debug(
           `[ModelManager] Model catalog lacks expected providers, not caching it: providers=${response.data.providers.length}, models=${validModelKeys.size}, missing=${missingProviders.join(",")}`,
@@ -449,12 +557,36 @@ async function readOpenCodeModelState(): Promise<{
   };
 }
 
+/** The selected model, always offered first: a pick made in Telegram is not in OpenCode's state. */
+function getSelectedFavoriteModel(): FavoriteModel | null {
+  const selectedModel = getCurrentModel();
+
+  if (!selectedModel?.providerID || !selectedModel.modelID) {
+    return null;
+  }
+
+  return { providerID: selectedModel.providerID, modelID: selectedModel.modelID };
+}
+
+function mergeFavorites(
+  selectedModel: FavoriteModel | null,
+  favorites: FavoriteModel[],
+  envDefaultModel: FavoriteModel | null,
+): FavoriteModel[] {
+  return dedupeModels([
+    ...(selectedModel ? [selectedModel] : []),
+    ...favorites,
+    ...(envDefaultModel ? [envDefaultModel] : []),
+  ]);
+}
+
 /**
  * Get favorite and recent models from OpenCode local state file.
- * Config model is always treated as favorite.
+ * The selected model and the config model are always treated as favorites.
  */
 export async function getModelSelectionLists(): Promise<ModelSelectionLists> {
   const envDefaultModel = getEnvDefaultModel();
+  const selectedModel = getSelectedFavoriteModel();
 
   try {
     const {
@@ -468,9 +600,7 @@ export async function getModelSelectionLists(): Promise<ModelSelectionLists> {
     const validatedFavorites = filterModelsByCatalog(rawFavorites, validModelKeys);
     const validatedRecent = filterModelsByCatalog(rawRecent, validModelKeys);
 
-    const favorites = envDefaultModel
-      ? dedupeModels([...validatedFavorites, envDefaultModel])
-      : validatedFavorites;
+    const favorites = mergeFavorites(selectedModel, validatedFavorites, envDefaultModel);
 
     if (rawFavorites.length === 0 && envDefaultModel) {
       logger.info(
@@ -510,14 +640,14 @@ export async function getModelSelectionLists(): Promise<ModelSelectionLists> {
         err,
       );
       return {
-        favorites: [envDefaultModel],
+        favorites: mergeFavorites(selectedModel, [], envDefaultModel),
         recent: [],
       };
     }
 
     logger.error("[ModelManager] Failed to load OpenCode model state:", err);
     return {
-      favorites: [],
+      favorites: selectedModel ? [selectedModel] : [],
       recent: [],
     };
   }
@@ -531,8 +661,11 @@ export async function getModelSelectionLists(): Promise<ModelSelectionLists> {
 export async function reconcileStoredModelSelection(options?: {
   forceCatalogRefresh?: boolean;
 }): Promise<StoredModelReconcileResult> {
+  // Never judge the stored model against the seeded file: a provider added since the last run
+  // would make an available model look retired and replace the user's choice.
   const { validModelKeys, isStale, isComplete } = await readModelCatalog({
-    force: options?.forceCatalogRefresh,
+    ignoreSeed: true,
+    ...(options?.forceCatalogRefresh ? { force: true } : {}),
   });
   const result: StoredModelReconcileResult = {
     catalogAvailable: validModelKeys !== null && !isStale,
@@ -599,6 +732,7 @@ export function __resetModelCatalogCacheForTests(): void {
   modelCatalogFetchInFlight = null;
   modelCatalogWaitedFetchInFlight = null;
   modelCatalogWarmupEndsAt = 0;
+  modelCatalogSeedRefreshInFlight = false;
   providersPresumedGone.clear();
   providersWaitsInFlight.clear();
 }

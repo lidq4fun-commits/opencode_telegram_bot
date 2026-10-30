@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "../../../src/opencode/types.js";
 import { SummaryAggregator } from "../../../src/app/managers/summary-aggregation-manager.js";
 
 function emitPartial(aggregator: SummaryAggregator, messageId: string, text: string): void {

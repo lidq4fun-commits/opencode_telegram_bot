@@ -1,4 +1,4 @@
-import type { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "../../opencode/types.js";
 import { config } from "../../config.js";
 import type { AppContainer } from "../bootstrap/app-container.js";
 import type { EventEnvelope } from "../../opencode/events.js";

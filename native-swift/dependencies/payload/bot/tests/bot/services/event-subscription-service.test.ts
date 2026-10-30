@@ -3,7 +3,7 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Context } from "grammy";
-import type { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "../../../src/opencode/types.js";
 import { setRuntimeMode } from "../../../src/runtime/mode.js";
 import { resetSingletonState } from "../../helpers/reset-singleton-state.js";
 import { defined } from "../../helpers/defined.js";
@@ -14,6 +14,12 @@ const mocked = vi.hoisted(() => ({
   subscribeToEvents: vi.fn(),
   stopEventListening: vi.fn(),
   sendTtsResponseForSession: vi.fn(),
+}));
+
+// Event ordering is tested at a short cadence; production timing has its own suite.
+vi.mock("../../../src/bot/streaming/stream-throttle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../src/bot/streaming/stream-throttle.js")>()),
+  getSessionStreamThrottleMs: () => 1000,
 }));
 
 vi.mock("../../../src/bot/handlers/tts-response-handler.js", async (importOriginal) => ({

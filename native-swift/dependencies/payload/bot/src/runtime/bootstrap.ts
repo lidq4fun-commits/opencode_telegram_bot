@@ -490,8 +490,12 @@ async function askAllowedUserId(): Promise<string> {
  * V1), V2 on a first setup.
  */
 export function getWizardServerVersionDefault(
-  _existingEnvContent: string | null,
+  existingEnvContent: string | null,
 ): OpencodeServerVersion {
+  if (existingEnvContent === null) {
+    return "v2";
+  }
+
   return "v2";
 }
 
@@ -501,12 +505,6 @@ export function pickServerPassword(
   savedPassword: string | undefined,
 ): string | undefined {
   return answer || savedPassword || undefined;
-}
-
-async function askServerVersion(
-  _defaultVersion: OpencodeServerVersion,
-): Promise<OpencodeServerVersion> {
-  return "v2";
 }
 
 async function askApiUrl(serverVersion: OpencodeServerVersion): Promise<string | undefined> {
@@ -542,7 +540,7 @@ async function askServerUsername(): Promise<string> {
 }
 
 async function askServerPassword(
-  _serverVersion: OpencodeServerVersion,
+  serverVersion: OpencodeServerVersion,
   savedPassword: string | undefined,
 ): Promise<string | undefined> {
   if (savedPassword) {
@@ -550,6 +548,9 @@ async function askServerPassword(
     return pickServerPassword(answer, savedPassword);
   }
 
+  if (serverVersion === "v1") {
+    return pickServerPassword(await askHidden(t("runtime.wizard.ask_server_password")), undefined);
+  }
 
   for (;;) {
     const password = await askHidden(t("runtime.wizard.ask_server_password_required"));
@@ -584,7 +585,7 @@ async function collectWizardValues(
 
   const token = await askToken();
   const allowedUserId = await askAllowedUserId();
-  const serverVersion = await askServerVersion(getWizardServerVersionDefault(existingEnvContent));
+  const serverVersion: OpencodeServerVersion = "v2";
   const apiUrl = await askApiUrl(serverVersion);
   const serverUsername = await askServerUsername();
   const savedPassword = existingEnvContent

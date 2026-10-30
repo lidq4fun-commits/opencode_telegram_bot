@@ -17,6 +17,7 @@ interface RetryAttemptInfo {
 
 interface TelegramRateLimitRetryOptions {
   maxRetries?: number;
+  maxRateLimitWaitMs?: number;
   fallbackDelayMs?: number;
   retryTransientServerErrors?: boolean;
   retryTransientNetworkErrors?: boolean;
@@ -94,7 +95,7 @@ function getStatusCode(error: unknown): number | null {
   return null;
 }
 
-function isTelegramRateLimitError(error: unknown): boolean {
+export function isTelegramRateLimitError(error: unknown): boolean {
   const status = getStatusCode(error);
   if (status !== null) {
     return status === 429;
@@ -258,6 +259,8 @@ export async function withTelegramRateLimitRetry<T>(
           : null);
       if (
         retryAfterMs === null ||
+        (isTelegramRateLimitError(error) &&
+          retryAfterMs > (options?.maxRateLimitWaitMs ?? Number.POSITIVE_INFINITY)) ||
         (!retryTransientServerErrors && isTransientTelegramServerError(error)) ||
         attempt >= maxRetries
       ) {

@@ -1,5 +1,6 @@
 import { t } from "../../i18n/index.js";
 import { logger } from "../../utils/logger.js";
+import { withTelegramDeliveryPriority } from "../telegram-send-scheduler.js";
 import {
   resolveStreamThrottleMs,
   type StreamThrottleMs,
@@ -9,6 +10,7 @@ interface CompactProgressState {
   sessionId: string;
   messageId: number | null;
   latestText: string;
+  lastSentText: string | null;
   toolCallIds: Set<string>;
   filePaths: Set<string>;
   // Background operations started on this card, in start order, with their current text.
@@ -42,6 +44,7 @@ function createInitialState(sessionId: string): CompactProgressState {
     sessionId,
     messageId: null,
     latestText: "",
+    lastSentText: null,
     toolCallIds: new Set(),
     filePaths: new Set(),
     backgroundActivities: new Map(),
@@ -471,10 +474,15 @@ export class CompactProgressStreamer {
   }
 
   private async syncState(state: CompactProgressState, reason: string): Promise<boolean> {
+    return withTelegramDeliveryPriority("progress", () => this.syncStateWithPriority(state, reason));
+  }
+
+  private async syncStateWithPriority(state: CompactProgressState, reason: string): Promise<boolean> {
     const text = state.latestText.trim();
     if (!text || state.cancelled) {
       return false;
     }
+    if (text === state.lastSentText) return true;
 
     try {
       if (state.messageId === null) {
@@ -482,6 +490,7 @@ export class CompactProgressStreamer {
       } else {
         await this.editText(state.sessionId, state.messageId, text);
       }
+      state.lastSentText = text;
 
       logger.debug(
         `[CompactProgress] Synced progress message: session=${state.sessionId}, reason=${reason}`,

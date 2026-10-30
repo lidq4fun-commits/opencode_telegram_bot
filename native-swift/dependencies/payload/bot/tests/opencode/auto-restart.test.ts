@@ -17,6 +17,7 @@ const mocked = vi.hoisted(() => ({
     opencode: {
       apiUrl: "http://localhost:4096",
       autoRestartEnabled: false,
+      managedByDesktop: false,
       monitorIntervalSec: 300,
     },
   },
@@ -100,6 +101,7 @@ describe("opencode/auto-restart", () => {
 
     mocked.config.opencode.apiUrl = "http://localhost:4096";
     mocked.config.opencode.autoRestartEnabled = false;
+    mocked.config.opencode.managedByDesktop = false;
     mocked.config.opencode.monitorIntervalSec = 300;
     mocked.resolveLocalOpencodeTargetMock.mockReturnValue({ host: "localhost", port: 4096 });
     mocked.startLocalOpencodeServerMock.mockReturnValue(createChildProcess(123));
@@ -183,6 +185,40 @@ describe("opencode/auto-restart", () => {
     expect(mocked.notifyReadyMock).toHaveBeenCalledWith("auto_restart_startup");
 
     service.stop();
+  });
+
+  it("waits briefly for the engine the desktop is starting, then notifies ready", async () => {
+    mocked.config.opencode.autoRestartEnabled = true;
+    mocked.config.opencode.managedByDesktop = true;
+    mocked.canStartLocalOpencodeServerMock.mockResolvedValue(false);
+    mocked.healthMock
+      .mockRejectedValueOnce(new Error("engine still booting"))
+      .mockRejectedValueOnce(new Error("engine still booting"))
+      .mockResolvedValue(healthyResponse());
+    const service = new OpencodeAutoRestartService(readyLifecycle);
+
+    const started = service.start();
+    await vi.advanceTimersByTimeAsync(1500);
+    await started;
+
+    expect(mocked.startLocalOpencodeServerMock).not.toHaveBeenCalled();
+    expect(mocked.notifyUnavailableMock).toHaveBeenCalledWith("auto_restart_startup");
+    expect(mocked.notifyReadyMock).toHaveBeenCalledWith("auto_restart_startup_wait");
+    expect(mocked.loggerInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining("became ready after"),
+    );
+
+    service.stop();
+  });
+
+  it("does not wait for a managed engine when auto-restart is off", async () => {
+    mocked.config.opencode.managedByDesktop = true;
+    mocked.config.opencode.autoRestartEnabled = false;
+    const service = new OpencodeAutoRestartService(readyLifecycle);
+
+    await service.start();
+
+    expect(mocked.healthMock).not.toHaveBeenCalled();
   });
 
   it("starts local server once when startup health-check fails", async () => {

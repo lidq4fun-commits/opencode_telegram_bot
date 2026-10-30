@@ -25,6 +25,31 @@ import { BOT_COMMANDS } from "../../../src/bot/commands/definitions.js";
 import { config } from "../../../src/config.js";
 
 describe("bot/routers/command-router", () => {
+  it("does not block the first commands on a pending menu registration and deduplicates it", async () => {
+    vi.resetModules();
+    const { ensureCommandsInitialized: initialize } =
+      await import("../../../src/bot/routers/command-router.js");
+    let release!: () => void;
+    const setMyCommands = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const ctx = {
+      from: { id: config.telegram.allowedUserId },
+      chat: { id: 123 },
+      api: { setMyCommands },
+    } as unknown as Context;
+    const next = vi.fn();
+    await initialize(ctx, next);
+    await initialize(ctx, next);
+    expect(next).toHaveBeenCalledTimes(2);
+    expect(setMyCommands).toHaveBeenCalledOnce();
+    release();
+    await Promise.resolve();
+  });
+
   it("registers bot slash command handlers", () => {
     const bot = { command: vi.fn(), use: vi.fn() };
 
@@ -44,8 +69,12 @@ describe("bot/routers/command-router", () => {
       "opencode_stop",
       "reload",
       "projects",
+      "delete_session",
+      "delete_project",
       "worktree",
       "open",
+      "create_project",
+      "connect",
       "ls",
       "sessions",
       "recent",

@@ -1,4 +1,5 @@
 import { logger } from "../utils/logger.js";
+import { config } from "../config.js";
 import { findRegisteredOpencodeServerUrl, opencodeServerVersion } from "./client.js";
 import {
   getOpencodeApiVersion,
@@ -59,7 +60,7 @@ async function isBlockedByExecutableVersion(mode: ProblemReportMode): Promise<bo
 
   reportOpencodeProblem(`executable:${executableVersion}`, mode, () =>
     logger.error(
-      `[OpenCode] Unsupported local opencode executable: OpenCode ${executableVersion}. Only OpenCode V2 is supported; select or install a V2 executable.`,
+      `[OpenCode] Server version mismatch: OPENCODE_SERVER_VERSION=${opencodeServerVersion}, but the local opencode executable is OpenCode ${executableVersion} (API ${executableApiVersion}). Set OPENCODE_SERVER_VERSION=${executableApiVersion} and restart the bot, or make an OpenCode ${opencodeServerVersion} opencode executable the first one on PATH.`,
     ),
   );
   return true;
@@ -73,12 +74,15 @@ export async function canStartLocalOpencodeServer(
   target: LocalOpencodeTarget,
   mode: ProblemReportMode,
 ): Promise<boolean> {
-  if (opencodeServerVersion !== "v2") {
-    reportOpencodeProblem("unsupported_version", mode, () =>
-      logger.error("[OpenCode] Only OpenCode V2 is supported. Set OPENCODE_SERVER_VERSION=v2."),
+  if (config.opencode.managedByDesktop) {
+    reportOpencodeProblem("desktop-managed", mode, () =>
+      logger.warn(
+        `[OpenCode] The desktop launcher owns the local OpenCode server for ${describeServerUrl()}; the Bot will not start another one.`,
+      ),
     );
     return false;
   }
+
   const cause = await classifyFailedHealthCheck();
   if (cause.kind !== "unknown") {
     reportFailedHealthCause(cause, mode);

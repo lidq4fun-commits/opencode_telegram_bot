@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 PAYLOAD="$ROOT/dependencies/payload"
 ARCHIVES="$ROOT/dependencies/archives"
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'Apple Silicon Mac required.' >&2; exit 1; }
-mkdir -p "$PAYLOAD/runtime" "$PAYLOAD/dependencies/opencode/v2" "$PAYLOAD/dependencies/bun" "$PAYLOAD/dependencies/licenses"
+mkdir -p "$PAYLOAD/runtime" "$PAYLOAD/dependencies/opencode/v2" "$PAYLOAD/dependencies/bun" "$PAYLOAD/dependencies/licenses" "$PAYLOAD/dependencies/tg"
 check_sha256() {
     local actual
     actual="$(shasum -a 256 "$ARCHIVES/$1" | awk '{print $1}')"
@@ -17,9 +17,12 @@ check_sha512() {
 }
 check_sha256 node-arm64.tar.gz 372331b969779ab5d15b949884fc6eaf88d5afe87bde8ba881d6400b9100ffc4
 check_sha256 bun-arm64.zip 90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f
+check_sha256 tg_0.11.0_darwin_arm64.tar.gz 9e72b09903c69e0a3854dfdac722bd44b99d4f2f5b9721e28bf1fa201f2b62f7
 check_sha512 opencode-v2.tgz 'NNg1VCCTWSfLlNKpRb4RA6IE7H67ZBLBYmfIWjP3CxR9NPtdROQFCL8lpPf+Tz2Qje4Bb27sQOLWanYyNT/9dQ=='
 echo 'Verified publisher checksums. Extracting Apple Silicon runtimes...'
 tar -xzf "$ARCHIVES/node-arm64.tar.gz" --strip-components=1 -C "$PAYLOAD/runtime"
+tar -xzf "$ARCHIVES/tg_0.11.0_darwin_arm64.tar.gz" -C "$PAYLOAD/dependencies/tg" tg LICENSE README.md
+chmod +x "$PAYLOAD/dependencies/tg/tg"
 STAGE="$(mktemp -d "$ROOT/dependencies/extract.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 ditto -x -k "$ARCHIVES/bun-arm64.zip" "$STAGE"

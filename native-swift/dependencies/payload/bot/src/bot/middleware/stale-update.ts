@@ -1,3 +1,4 @@
+import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 import type { Context, NextFunction } from "grammy";
 import { telegramOutageNoticeService } from "../../app/services/telegram-outage-notice-service.js";
 import { flushTelegramOutageNotices } from "../telegram-outage-notices.js";
@@ -26,7 +27,10 @@ export async function staleUpdateMiddleware(ctx: Context, next: NextFunction): P
   if (ageSeconds <= MAX_MESSAGE_AGE_SECONDS) {
     telegramOutageNoticeService.closeBurst();
     if (canNotify) {
-      await flushTelegramOutageNotices({ api: ctx.api, chatId });
+      safeBackgroundTask({
+        taskName: "bot.outageNotice",
+        task: () => flushTelegramOutageNotices({ api: ctx.api, chatId }),
+      });
     }
     await next();
     return;
@@ -37,6 +41,9 @@ export async function staleUpdateMiddleware(ctx: Context, next: NextFunction): P
     `[StaleUpdate] Ignored stale message: ageSeconds=${ageSeconds}, updateId=${ctx.update.update_id}, messageId=${message.message_id}`,
   );
   if (canNotify) {
-    await flushTelegramOutageNotices({ api: ctx.api, chatId });
+    safeBackgroundTask({
+      taskName: "bot.outageNotice",
+      task: () => flushTelegramOutageNotices({ api: ctx.api, chatId }),
+    });
   }
 }

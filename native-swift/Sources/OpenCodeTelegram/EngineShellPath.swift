@@ -4,7 +4,7 @@ enum EngineShellPath {
     static let begin = "# >>> OpenCodeTelegram selected engine >>>"
     static let end = "# <<< OpenCodeTelegram selected engine <<<"
 
-    static func content(_ existing: String, executable: URL) throws -> String {
+    static func content(_ existing: String, executable: URL, begin: String = EngineShellPath.begin, end: String = EngineShellPath.end) throws -> String {
         let directory = executable.deletingLastPathComponent().path
         guard !directory.contains("\n"), !directory.contains("\r"), !directory.contains(":") else {
             throw AppFailure.message("Engine PATH directories cannot contain line breaks or colons.")
@@ -24,7 +24,7 @@ enum EngineShellPath {
             block
     }
 
-    static func sync(_ executable: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+    static func sync(_ executable: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser, begin: String = EngineShellPath.begin, end: String = EngineShellPath.end) throws {
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw AppFailure.message("Selected OpenCode executable is missing; terminal PATH was not changed.")
         }
@@ -35,7 +35,7 @@ enum EngineShellPath {
             let file = directory.appendingPathComponent(name).resolvingSymlinksInPath()
             let existed = FileManager.default.fileExists(atPath: file.path)
             let existing = existed ? try String(contentsOf: file, encoding: .utf8) : ""
-            let updated = try content(existing, executable: executable)
+            let updated = try content(existing, executable: executable, begin: begin, end: end)
             updates.append((file, existing, updated, existed))
         }
         var committed: [(URL, String, String, Bool)] = []

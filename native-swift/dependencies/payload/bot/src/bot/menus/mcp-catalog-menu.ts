@@ -1,4 +1,4 @@
-import type { McpStatus } from "@opencode-ai/sdk/v2";
+import type { McpStatus } from "../../opencode/types.js";
 import { InlineKeyboard } from "grammy";
 import type { McpCatalogServerItem } from "../../app/services/mcp-catalog-service.js";
 import { t } from "../../i18n/index.js";

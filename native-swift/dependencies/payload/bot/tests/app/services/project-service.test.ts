@@ -31,6 +31,7 @@ vi.mock("../../../src/app/services/session-cache-service.js", () => ({
 }));
 
 import { getProjects, getProjectByWorktree } from "../../../src/app/services/project-service.js";
+import { hideProject, __resetSettingsForTests } from "../../../src/app/stores/settings-store.js";
 
 describe("project/manager", () => {
   let tempRoot = "";
@@ -39,6 +40,7 @@ describe("project/manager", () => {
     projectListMock.mockReset();
     cachedSessionProjectsMock.mockReset();
     configMock.bot.excludedProjectPaths = [];
+    __resetSettingsForTests();
   });
 
   afterEach(async () => {
@@ -375,5 +377,21 @@ describe("project/manager", () => {
         Object.defineProperty(process, "platform", { value: originalPlatform });
       }
     });
+  });
+
+  it("hides projects deleted from the phone", async () => {
+    projectListMock.mockResolvedValueOnce({
+      data: [
+        { id: "p1", worktree: "D:/repo-a", name: "Repo A" },
+        { id: "p2", worktree: "D:/repo-b", name: "Repo B" },
+      ],
+      error: null,
+    });
+    cachedSessionProjectsMock.mockResolvedValueOnce([]);
+    hideProject("d:\\repo-b\\");
+
+    const projects = await getProjects();
+
+    expect(projects).toEqual([{ id: "p1", worktree: "D:/repo-a", name: "Repo A" }]);
   });
 });

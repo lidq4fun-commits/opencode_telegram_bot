@@ -20,6 +20,7 @@ const TEMP_DIR = path.join(__dirname, "..", "..", ".tmp");
 type TelegramApi = Bot<Context>["api"];
 type SendMessageOptions = Parameters<TelegramApi["sendMessage"]>[2];
 type SendDocumentOptions = Parameters<TelegramApi["sendDocument"]>[2];
+type SendPhotoOptions = Parameters<TelegramApi["sendPhoto"]>[2];
 type RenderedSendOptions = Parameters<typeof sendRenderedBotPart>[0]["options"];
 type RenderedEditOptions = Parameters<typeof editRenderedBotPart>[0]["options"];
 type DraftCompleteOptions = Parameters<typeof completeDraftPart>[0]["options"];
@@ -118,6 +119,17 @@ export class TelegramEventDelivery {
     } finally {
       await fs.unlink(tempFilePath).catch(() => {});
     }
+  }
+
+  /** Sends an image a tool produced. EOT10 turns it into an encrypted document in the API layer. */
+  async sendPhoto(
+    destination: TelegramDestination,
+    buffer: Buffer,
+    filename: string,
+    options?: SendPhotoOptions,
+  ): Promise<void> {
+    logger.debug(`[Bot] Sending tool image: ${filename} (${buffer.length} bytes)`);
+    await destination.api.sendPhoto(destination.chatId, new InputFile(buffer, filename), options);
   }
 
   sendRenderedPart(

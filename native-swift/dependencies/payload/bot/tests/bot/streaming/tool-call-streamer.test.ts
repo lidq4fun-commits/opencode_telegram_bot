@@ -588,6 +588,17 @@ describe("bot/streaming/tool-call-streamer", () => {
     expect(deleteText).not.toHaveBeenCalled();
   });
 
+  it("does not hold tool completion on a long Telegram flood wait", async () => {
+    vi.useFakeTimers();
+    const sendText = vi.fn().mockRejectedValue(new Error("429: retry after 3499"));
+    const streamer = new ToolCallStreamer({ throttleMs: 0, sendText, editText: vi.fn(), deleteText: vi.fn() });
+    streamer.append("s1", "working");
+    await vi.advanceTimersByTimeAsync(0);
+    await streamer.breakSession("s1", "test");
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("cancels retry-after resend when the session is cleared", async () => {
     vi.useFakeTimers();
 

@@ -27,17 +27,17 @@ describe("bot/streaming/stream-throttle", () => {
   });
 
   describe("resolveProgressiveThrottleMs", () => {
-    it("stays at 1s until one minute", () => {
+    it("starts with a conservative 5s interval", () => {
       expect(resolveProgressiveThrottleMs(0)).toBe(STREAM_THROTTLE_BASE_MS);
       expect(resolveProgressiveThrottleMs(MINUTE_MS - 1)).toBe(STREAM_THROTTLE_BASE_MS);
     });
 
-    it("steps to 2s at one minute", () => {
-      expect(resolveProgressiveThrottleMs(MINUTE_MS)).toBe(2_000);
-      expect(resolveProgressiveThrottleMs(5 * MINUTE_MS - 1)).toBe(2_000);
+    it("keeps the 5s interval after one minute", () => {
+      expect(resolveProgressiveThrottleMs(MINUTE_MS)).toBe(5_000);
+      expect(resolveProgressiveThrottleMs(5 * MINUTE_MS - 1)).toBe(5_000);
     });
 
-    it("steps to 5s at five minutes", () => {
+    it("keeps 5s updates through fifteen minutes", () => {
       expect(resolveProgressiveThrottleMs(5 * MINUTE_MS)).toBe(5_000);
       expect(resolveProgressiveThrottleMs(15 * MINUTE_MS - 1)).toBe(5_000);
     });
@@ -57,7 +57,7 @@ describe("bot/streaming/stream-throttle", () => {
       noteStreamActivity("s1", 0);
 
       expect(getStreamThrottleMs("s1", 0)).toBe(STREAM_THROTTLE_BASE_MS);
-      expect(getStreamThrottleMs("s1", MINUTE_MS)).toBe(2_000);
+      expect(getStreamThrottleMs("s1", MINUTE_MS)).toBe(5_000);
       expect(getStreamThrottleMs("s1", 5 * MINUTE_MS)).toBe(5_000);
       expect(getStreamThrottleMs("s1", 15 * MINUTE_MS)).toBe(STREAM_THROTTLE_MAX_MS);
     });
@@ -66,12 +66,12 @@ describe("bot/streaming/stream-throttle", () => {
       noteStreamActivity("s1", 0);
       noteStreamActivity("s1", MINUTE_MS);
 
-      expect(getStreamThrottleMs("s1", MINUTE_MS)).toBe(2_000);
+      expect(getStreamThrottleMs("s1", MINUTE_MS)).toBe(5_000);
     });
 
     it("notes activity when resolving the session interval", () => {
       expect(getSessionStreamThrottleMs("s1", 0)).toBe(STREAM_THROTTLE_BASE_MS);
-      expect(getStreamThrottleMs("s1", MINUTE_MS)).toBe(2_000);
+      expect(getStreamThrottleMs("s1", MINUTE_MS)).toBe(5_000);
     });
 
     it("resets one session without touching another", () => {
@@ -81,7 +81,7 @@ describe("bot/streaming/stream-throttle", () => {
       resetStreamThrottle("s1");
 
       expect(getStreamThrottleMs("s1", MINUTE_MS)).toBe(STREAM_THROTTLE_BASE_MS);
-      expect(getStreamThrottleMs("s2", MINUTE_MS)).toBe(2_000);
+      expect(getStreamThrottleMs("s2", MINUTE_MS)).toBe(5_000);
     });
 
     it("resets every session clock", () => {

@@ -1,6 +1,6 @@
+import { isProjectDirectoryMissing } from "../../app/services/project-directory-service.js";
 import { Bot, Context } from "grammy";
-import type { FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2";
-import type { Model } from "@opencode-ai/sdk/v2";
+import type { FilePartInput, TextPartInput, Model } from "../../opencode/types.js";
 import { opencodeClient, opencodeV2Client } from "../../opencode/client.js";
 import type { V2InboxDelivery } from "../../opencode/v2/client.js";
 import {
@@ -12,12 +12,14 @@ import { ingestSessionInfoForCache } from "../../app/services/session-cache-serv
 import { getCurrentProject, getTtsMode } from "../../app/stores/settings-store.js";
 import { getStoredAgent, resolveProjectAgent } from "../../app/services/agent-selection-service.js";
 import { getStoredModel } from "../../app/services/model-selection-service.js";
+import { rememberPromptForModelRetry } from "../../app/services/prompt-model-retry.js";
 import { formatVariantForButton } from "../../app/services/variant-selection-service.js";
 import { createMainKeyboard } from "../keyboards/main-reply-keyboard.js";
 import { stopEventListening } from "../../opencode/events.js";
 import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 import { formatErrorDetails } from "../../utils/error-format.js";
 import { logger } from "../../utils/logger.js";
+import { isTelegramRateLimitError } from "../../utils/telegram-rate-limit-retry.js";
 import { t } from "../../i18n/index.js";
 import { formatSessionTitle } from "../../app/formatters/session-title-formatter.js";
 import type { AppContainer } from "../../app/bootstrap/app-container.js";
@@ -29,18 +31,15 @@ import {
 } from "../../app/services/attach-service.js";
 import { promptAttachment } from "../../app/managers/prompt-attachment-manager.js";
 import { resolvePendingAttachment } from "../../app/services/prompt-attachment-service.js";
-import { downloadTelegramFile, toDataUri } from "../../app/services/file-download-service.js";
+import {
+  downloadTelegramFile,
+  toDataUri,
+} from "../../app/services/file-download-service.js";
 import {
   getModelCapabilities,
   supportsInput,
 } from "../../app/services/model-capabilities-service.js";
 import type { IncomingPrompt } from "../../app/types/prompt.js";
-import {
-  isProviderLoginRequired,
-  promptFailureMessage,
-  providerLoginReminder,
-} from "../../utils/provider-auth.js";
-import { needsProviderLogin } from "../../app/services/provider-login-service.js";
 
 /** Module-level references for async callbacks that don't have ctx. */
 let botInstance: Bot<Context> | null = null;
@@ -55,6 +54,13 @@ type ProcessPromptOptions = {
 
 export function getPromptBotInstance(): Bot<Context> | null {
   return botInstance;
+}
+
+function ignoreRateLimitedSessionNotice(error: unknown): void {
+  if (!isTelegramRateLimitError(error)) {
+    throw error;
+  }
+  logger.warn("[Bot] Session notice rate limited; continuing prompt dispatch");
 }
 
 export function getPromptChatId(): number | null {
@@ -118,21 +124,22 @@ async function resetMismatchedSessionContext(deps: ProcessPromptDeps): Promise<v
   }
 }
 
-export interface ProcessPromptDeps extends Pick<
-  AppContainer,
-  | "assistantRunState"
-  | "attachManager"
-  | "externalUserInputSuppressionManager"
-  | "foregroundSessionState"
-  | "interactionManager"
-  | "keyboardManager"
-  | "permissionManager"
-  | "pinnedMessageManager"
-  | "questionManager"
-  | "resetAggregator"
-  | "resetInteractions"
-  | "summaryAggregator"
-> {
+export interface ProcessPromptDeps
+  extends Pick<
+    AppContainer,
+    | "assistantRunState"
+    | "attachManager"
+    | "externalUserInputSuppressionManager"
+    | "foregroundSessionState"
+    | "interactionManager"
+    | "keyboardManager"
+    | "permissionManager"
+    | "pinnedMessageManager"
+    | "questionManager"
+    | "resetAggregator"
+    | "resetInteractions"
+    | "summaryAggregator"
+  > {
   bot: Bot<Context>;
   ensureEventSubscription: (directory: string) => Promise<void>;
   downloadFile?: (
@@ -206,6 +213,11 @@ export async function processUserPrompt(
     return false;
   }
 
+  if (await isProjectDirectoryMissing(currentProject.worktree)) {
+    await ctx.reply(t("bot.project_directory_missing", { directory: currentProject.worktree }));
+    return false;
+  }
+
   botInstance = bot;
   chatIdInstance = ctx.chat!.id;
 
@@ -222,7 +234,7 @@ export async function processUserPrompt(
   }
 
   if (!currentSession) {
-    await ctx.reply(t("bot.creating_session"));
+    await ctx.reply(t("bot.creating_session")).catch(ignoreRateLimitedSessionNotice);
 
     const { data: session, error } = await opencodeClient.session.create({
       directory: currentProject.worktree,
@@ -273,7 +285,7 @@ export async function processUserPrompt(
 
     await ctx.reply(t("bot.session_created", { title: formatSessionTitle(currentSession.title) }), {
       reply_markup: keyboard,
-    });
+    }).catch(ignoreRateLimitedSessionNotice);
   }
 
   if (input.photos.length > 0) {
@@ -300,6 +312,9 @@ export async function processUserPrompt(
     }
     const { promptOptions, storedModel, currentAgent, preparedText, promptErrorLogContext } =
       prepared;
+
+    // Remembered so a transient "Model unavailable" failure can re-send this exact prompt.
+    rememberPromptForModelRetry(promptOptions);
 
     logger.info(
       `[Bot] Calling session.promptAsync (start-only) with agent=${currentAgent}, fileCount=${promptErrorLogContext.fileCount}...`,
@@ -340,7 +355,7 @@ export async function processUserPrompt(
 
           // Send user-friendly error via API directly because ctx is no longer available
           if (attachManager.isAttachedSession(currentSession.id)) {
-            void bot.api.sendMessage(ctx.chat!.id, promptFailureMessage(error)).catch(() => {});
+            void bot.api.sendMessage(ctx.chat!.id, t("bot.prompt_send_error")).catch(() => {});
           }
           return;
         }
@@ -357,7 +372,7 @@ export async function processUserPrompt(
         logger.error("[Bot] session.promptAsync background failure details:", details);
         logger.error("[Bot] session.promptAsync raw background error object:", error);
         if (attachManager.isAttachedSession(currentSession.id)) {
-          void bot.api.sendMessage(ctx.chat!.id, promptFailureMessage(error)).catch(() => {});
+          void bot.api.sendMessage(ctx.chat!.id, t("bot.prompt_send_error")).catch(() => {});
         }
       },
     });
@@ -373,7 +388,7 @@ export async function processUserPrompt(
     if (interactionManager.getSnapshot()) {
       deps.resetInteractions("message_handler_error");
     }
-    await ctx.reply(isProviderLoginRequired(err) ? providerLoginReminder() : t("error.generic"));
+    await ctx.reply(t("error.generic"));
     return false;
   }
 }
@@ -408,10 +423,6 @@ async function preparePromptRequest(
 ): Promise<PreparedPromptRequest | null> {
   const currentAgent = await resolveProjectAgent(getStoredAgent());
   const storedModel = (deps.getStoredModel ?? getStoredModel)();
-  if (await needsProviderLogin(storedModel, currentSession.directory)) {
-    await ctx.reply(providerLoginReminder());
-    return null;
-  }
   const preparedInput = await prepareTelegramPhotos(ctx, input, deps, storedModel);
   if (!preparedInput) {
     return null;
@@ -562,6 +573,11 @@ export async function admitPromptToInbox(
     return null;
   }
 
+  if (await isProjectDirectoryMissing(currentSession.directory)) {
+    await ctx.reply(t("bot.project_directory_missing", { directory: currentSession.directory }));
+    return null;
+  }
+
   try {
     const prepared = await preparePromptRequest(ctx, input, deps, currentSession);
     if (!prepared) {
@@ -571,6 +587,7 @@ export async function admitPromptToInbox(
     logger.info(
       `[Bot] Sending prompt to the session inbox: session=${currentSession.id}, delivery=${delivery}, fileCount=${prepared.promptErrorLogContext.fileCount}`,
     );
+    rememberPromptForModelRetry(prepared.promptOptions);
     const { data, error } = await opencodeV2Client.session.promptAsync({
       ...prepared.promptOptions,
       delivery,
@@ -578,14 +595,14 @@ export async function admitPromptToInbox(
     if (error || !data) {
       logger.error("[Bot] OpenCode refused the inbox prompt", prepared.promptErrorLogContext);
       logger.error("[Bot] Inbox prompt error details:", formatErrorDetails(error, 6000));
-      await ctx.reply(promptFailureMessage(error));
+      await ctx.reply(t("bot.prompt_send_error"));
       return null;
     }
 
     return { sessionId: currentSession.id, inboxId: data.inboxID };
   } catch (err) {
     logger.error(`[Bot] Failed to send prompt to the inbox: session=${currentSession.id}`, err);
-    await ctx.reply(promptFailureMessage(err));
+    await ctx.reply(t("bot.prompt_send_error"));
     return null;
   }
 }

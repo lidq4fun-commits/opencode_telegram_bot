@@ -4,9 +4,8 @@ import type { Context, NextFunction } from "grammy";
 const flushPendingPromptMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../src/bot/handlers/prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../src/bot/handlers/prompt.js")>()),
-  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "album-inbox" })),
+  admitPromptToInbox: vi.fn(async () => ({ sessionId: "session-1", inboxId: "inbox-1" })),
 }));
-import { admitPromptToInbox } from "../../../src/bot/handlers/prompt.js";
 
 vi.mock("../../../src/bot/handlers/message-merger.js", () => ({
   flushPendingPrompt: flushPendingPromptMock,
@@ -188,20 +187,25 @@ describe("bot/handlers/media-group", () => {
     expect(flushPendingPromptMock).toHaveBeenCalledWith(777);
     expect(first.replyMock).toHaveBeenCalledWith(t("bot.files_downloading"));
     expect(processPromptMock).toHaveBeenCalledTimes(1);
-    expect(processPromptMock).toHaveBeenCalledWith(first.ctx, "What is on these images?", deps, [
-      expect.objectContaining({
-        type: "file",
-        mime: "image/png",
-        filename: "first.png",
-        url: expect.stringMatching(/^data:image\/png;base64,/),
-      }),
-      expect.objectContaining({
-        type: "file",
-        mime: "image/png",
-        filename: "second.png",
-        url: expect.stringMatching(/^data:image\/png;base64,/),
-      }),
-    ]);
+    expect(processPromptMock).toHaveBeenCalledWith(
+      first.ctx,
+      "What is on these images?",
+      deps,
+      [
+        expect.objectContaining({
+          type: "file",
+          mime: "image/png",
+          filename: "first.png",
+          url: expect.stringMatching(/^data:image\/png;base64,/),
+        }),
+        expect.objectContaining({
+          type: "file",
+          mime: "image/png",
+          filename: "second.png",
+          url: expect.stringMatching(/^data:image\/png;base64,/),
+        }),
+      ],
+    );
   });
 
   it("queues an album as one item while the agent is busy", async () => {
@@ -227,23 +231,15 @@ describe("bot/handlers/media-group", () => {
 
     expect(processPromptMock).not.toHaveBeenCalled();
     expect(promptQueue.size()).toBe(1);
-    expect(admitPromptToInbox).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(promptQueue.list()[0]).toEqual(
       expect.objectContaining({
         displayText: "Compare these photos",
-        fileParts: [
-          expect.objectContaining({ filename: "photo-20.jpg" }),
-          expect.objectContaining({ filename: "photo-21.jpg" }),
-        ],
+        inbox: { sessionId: "session-1", inboxId: "inbox-1", delivery: "queue" },
       }),
-      deps,
-      "queue",
     );
-    expect(promptQueue.list()[0]?.displayText).toBe("Compare these photos");
-    expect(promptQueue.list()[0]?.fileParts).toEqual([]);
   });
 
-  it("rejects an oversized busy album before downloading any item", async () => {
+  it("prepares busy V2 albums without the removed local V1 media cap", async () => {
     vi.spyOn(settingsStore, "getPromptQueueMode").mockReturnValue("queue");
     container.foregroundSessionState.markBusy("session-1", "/repo");
     const first = createPhotoContext({
@@ -265,7 +261,7 @@ describe("bot/handlers/media-group", () => {
     await addToHandler(handler, second.ctx);
     await handler.flushAll();
 
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(downloadMock).toHaveBeenCalledTimes(2);
     expect(processPromptMock).not.toHaveBeenCalled();
     expect(promptQueue.mediaSize()).toBe(0);
   });
@@ -291,10 +287,15 @@ describe("bot/handlers/media-group", () => {
 
     expect(downloadMock).toHaveBeenCalledWith(first.ctx.api, "large-1");
     expect(downloadMock).toHaveBeenCalledWith(second.ctx.api, "large-2");
-    expect(processPromptMock).toHaveBeenCalledWith(first.ctx, "Compare these photos", deps, [
-      expect.objectContaining({ mime: "image/jpeg", filename: "photo-20.jpg" }),
-      expect.objectContaining({ mime: "image/jpeg", filename: "photo-21.jpg" }),
-    ]);
+    expect(processPromptMock).toHaveBeenCalledWith(
+      first.ctx,
+      "Compare these photos",
+      deps,
+      [
+        expect.objectContaining({ mime: "image/jpeg", filename: "photo-20.jpg" }),
+        expect.objectContaining({ mime: "image/jpeg", filename: "photo-21.jpg" }),
+      ],
+    );
   });
 
   it("combines image, PDF, and text documents into one prompt", async () => {

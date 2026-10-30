@@ -18,6 +18,9 @@ import {
 } from "./model-selection-callback-handler.js";
 import { handlePermissionCallback } from "./permission-callback-handler.js";
 import { handleProjectSelect } from "./project-callback-handler.js";
+import { handleDeleteCallback } from "./delete-callback-handler.js";
+import { handleCreateProjectCancel } from "./create-project-callback-handler.js";
+import { handleConnectCallback } from "./connect-callback-handler.js";
 import { handlePromptAttachmentCancel } from "./prompt-attachment-callback-handler.js";
 import { handleQuestionCallback } from "./question-callback-handler.js";
 import { handleRecentSelect } from "./recent-callback-handler.js";
@@ -88,6 +91,30 @@ export function registerCallbackRouter(bot: Bot<Context>, deps: CallbackRouterDe
     [
       "compact",
       { name: "compact", handlers: [(ctx) => handleCompactDetails(ctx, container), (ctx) => handleCompactConfirm(ctx, container)], errorScope: "interaction" },
+    ],
+    [
+      "delete",
+      {
+        name: "delete",
+        handlers: [(ctx) => handleDeleteCallback(ctx, container)],
+        errorScope: "interaction",
+      },
+    ],
+    [
+      "create_project",
+      {
+        name: "create_project",
+        handlers: [(ctx) => handleCreateProjectCancel(ctx, container)],
+        errorScope: "interaction",
+      },
+    ],
+    [
+      "connect",
+      {
+        name: "connect",
+        handlers: [(ctx) => handleConnectCallback(ctx, container)],
+        errorScope: "interaction",
+      },
     ],
     [
       "ls",

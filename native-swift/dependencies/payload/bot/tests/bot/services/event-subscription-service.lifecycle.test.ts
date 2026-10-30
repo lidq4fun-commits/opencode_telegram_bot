@@ -3,7 +3,7 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Context } from "grammy";
-import type { Event } from "@opencode-ai/sdk/v2";
+import type { Event } from "../../../src/opencode/types.js";
 import { setRuntimeMode } from "../../../src/runtime/mode.js";
 import { resetSingletonState } from "../../helpers/reset-singleton-state.js";
 import { defined } from "../../helpers/defined.js";
@@ -397,13 +397,13 @@ describe("bot/services/event-subscription-service lifecycle", () => {
         "../../../src/bot/streaming/stream-throttle.js"
       );
 
-      noteStreamActivity("session-1", Date.now() - 10 * 60_000);
-      expect(getStreamThrottleMs("session-1")).toBe(5_000);
+      noteStreamActivity("session-1", Date.now() - 20 * 60_000);
+      expect(getStreamThrottleMs("session-1")).toBe(10_000);
 
       emitSessionIdle(summaryAggregator);
       await settle();
 
-      expect(getStreamThrottleMs("session-1")).toBe(1_000);
+      expect(getStreamThrottleMs("session-1")).toBe(5_000);
     });
 
     it("holds the run footer until the pending completion task finishes", async () => {

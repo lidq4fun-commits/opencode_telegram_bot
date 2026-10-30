@@ -8,9 +8,13 @@
   const nativeSet = Storage.prototype.setItem;
   const pending = new Map();
   let state, target, version, locale, lastInput = 0, applying = false;
+  let hiddenProjects = new Set();
   let modelTimer, routeTimer, lastRoute = location.pathname + location.search;
   let sequence = 0;
+  const USER_INPUT_WINDOW_MS = 2500;
+  const userActedRecently = () => Date.now() - lastInput <= USER_INPUT_WINDOW_MS;
   const parse = (value) => { try { return JSON.parse(value); } catch { return undefined; } };
+  const pathKey = (value) => typeof value === "string" ? value.replace(/[\\/]+$/, "").toLowerCase() : "";
   const modelKey = (model) => model ? `${model.providerID}/${model.modelID || model.id}/${model.variant || "default"}` : "";
   const model = (item, variant) => item?.providerID && (item.modelID || item.id)
     ? { providerID: item.providerID, modelID: item.modelID || item.id, variant: variant ?? item.variant ?? "default" } : undefined;
@@ -18,6 +22,17 @@
   const decode = (value) => {
     try { return new TextDecoder().decode(Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0))); }
     catch { return undefined; }
+  };
+  const routeURL = (pathname, params = {}) => {
+    const current = new URL(target || location.href);
+    const token = current.searchParams.get("auth_token") || new URL(location.href).searchParams.get("auth_token");
+    current.pathname = pathname;
+    current.search = "";
+    if (token) current.searchParams.set("auth_token", token);
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) current.searchParams.set(key, value);
+    }
+    return current.toString();
   };
   const directory = () => {
     if (version === "v1") return decode(location.pathname.split("/")[1] || "");
@@ -38,8 +53,8 @@
   };
   const notice = (reason) => {
     const text = locale === "en"
-      ? ({ busy: "AI is still responding. Stay in this conversation until it finishes.", mobile: "The phone just changed the shared workspace. Following its latest action.", unavailable: "Synchronization is unavailable. Reconnect the bot before continuing.", stale: "Workspace changed. Following the latest synchronized state." }[reason] || "Synchronization failed. Please reconnect.")
-      : ({ busy: "AI 还在回答，请等待回答结束后再切换项目或会话。", mobile: "手机刚刚操作了共享工作区，正在跟随手机的最新操作。", unavailable: "同步暂时不可用，请重新连接机器人后继续。", stale: "工作区状态已更新，正在跟随最新同步状态。" }[reason] || "同步失败，请重新连接机器人。");
+      ? ({ project_missing: "The project folder is missing or was moved. Restore it or select an existing project and start a new session.", busy: "AI is still responding. Stay in this conversation until it finishes.", mobile: "The phone just changed the shared workspace. Following its latest action.", unavailable: "Synchronization is unavailable. Reconnect the bot before continuing.", stale: "Workspace changed. Following the latest synchronized state." }[reason] || "Synchronization failed. Please reconnect.")
+      : ({ project_missing: "项目目录不存在或已移动。请恢复目录，或选择有效项目并新建会话。", busy: "AI 还在回答，请等待回答结束后再切换项目或会话。", mobile: "手机刚刚操作了共享工作区，正在跟随手机的最新操作。", unavailable: "同步暂时不可用，请重新连接机器人后继续。", stale: "工作区状态已更新，正在跟随最新同步状态。" }[reason] || "同步失败，请重新连接机器人。");
     let element = document.getElementById("opencode-telegram-sync-notice");
     if (!element) {
       element = document.createElement("div");
@@ -56,19 +71,20 @@
     if (!state || Date.now() - state.updatedAt > 6000) { notice("unavailable"); reject(new Error("Synchronization unavailable")); return; }
     const id = `${Date.now()}-${String(++sequence).padStart(6, "0")}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => { pending.delete(id); notice("unavailable"); reject(new Error("Synchronization timed out")); }, 12000);
-    pending.set(id, { resolve, reject, timer });
-    window.chrome.webview.postMessage({ id, kind, instance: state.instance, mobileRevision: state.mobileRevision,
-      createdAt: Date.now(), directory: directory(), sessionID: sessionID(), ...details });
+    const payload = { id, kind, instance: state.instance, mobileRevision: state.mobileRevision,
+      createdAt: Date.now(), directory: directory(), sessionID: sessionID(), ...details };
+    pending.set(id, { resolve, reject, timer, kind, directory: payload.directory });
+    window.chrome.webview.postMessage(payload);
   });
   const fire = (kind, details) => { send(kind, details).catch(() => {}); };
   const follow = (reason) => {
-    if (!target || location.pathname === new URL(target).pathname) return;
+    if (state?.projectUnavailable || !target || location.pathname === new URL(target).pathname) return;
     sessionStorage.setItem("opencode-telegram-sync-reason", reason);
     location.replace(target);
   };
   const reloadAuthenticated = () => {
     const address = new URL(location.href);
-    const token = target && new URL(target).searchParams.get("auth_token");
+    const token = (target && new URL(target).searchParams.get("auth_token")) || address.searchParams.get("auth_token");
     if (token) { address.searchParams.set("auth_token", token); location.replace(address.href); }
     else location.reload();
   };
@@ -100,7 +116,7 @@
   };
   Storage.prototype.setItem = function (key, raw) {
     nativeSet.call(this, key, raw);
-    if (this !== localStorage || applying || Date.now() - lastInput > 2500 || !state) return;
+    if (this !== localStorage || applying || !userActedRecently() || !state) return;
     const value = parse(raw);
     if (!value) return;
     // V2's home project selection is part of the persisted layout, not its URL.
@@ -125,14 +141,17 @@
   const routeChanged = () => {
     if (!state || Date.now() - state.updatedAt > 6000 || applying || location.pathname + location.search === lastRoute) return;
     lastRoute = location.pathname + location.search;
-    if (state.busy || state.mobileActive) { notice(state.busy ? "busy" : "mobile"); follow(state.busy ? "busy" : "mobile"); return; }
+    if (!state.projectUnavailable && (state.busy || state.mobileActive) && state.currentSession?.id) { notice(state.busy ? "busy" : "mobile"); follow(state.busy ? "busy" : "mobile"); return; }
+    // Restoring a persisted tab is also a route change, but it is not a user selection: publishing
+    // it here would pull the phone back to the previous project right after a mobile project switch.
+    if (!userActedRecently()) return;
     if (sessionID() || location.pathname === "/new-session" || (version === "v1" && directory())) fire("selection");
   };
   for (const name of ["pushState", "replaceState"]) {
     const original = history[name];
     history[name] = function (...args) { const result = original.apply(this, args); clearTimeout(routeTimer); routeTimer = setTimeout(routeChanged, 0); return result; };
   }
-  window.addEventListener("popstate", routeChanged);
+  window.addEventListener("popstate", () => { lastInput = Date.now(); routeChanged(); });
 
   window.fetch = async function (input, init) {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url, location.href);
@@ -141,9 +160,20 @@
     if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && (!state || Date.now() - state.updatedAt > 6000)) {
       notice("unavailable"); throw new Error("Synchronization unavailable");
     }
-    if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && (state?.busy || state?.mobileActive)) {
-      notice(state.busy ? "busy" : "mobile"); follow(state.busy ? "busy" : "mobile");
-      throw new Error("Finish the current synchronized operation before creating a session");
+    // Creating a session in another project is allowed while the shared session answers; only
+    // the busy project itself stays locked.
+    if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && state?.mobileActive) {
+      notice("mobile"); follow("mobile");
+      throw new Error("Follow the phone's current operation before creating a session");
+    }
+    if (native && method === "POST" && /\/(api\/)?session$/.test(url.pathname) && state?.busy) {
+      const rawCreation = init?.body ?? (input instanceof Request ? await input.clone().text() : undefined);
+      const creation = typeof rawCreation === "string" ? parse(rawCreation) : undefined;
+      const creationDirectory = creation?.location?.directory || creation?.directory;
+      if (!creationDirectory || creationDirectory === state.currentProject?.worktree) {
+        notice("busy"); follow("busy");
+        throw new Error("Finish the current synchronized operation before creating a session");
+      }
     }
     const prompt = native && method === "POST" && /\/session\/ses_[\w-]+\/(prompt|prompt_async|command|shell)$/.test(url.pathname);
     const modelUpdate = native && method === "POST" && /\/session\/ses_[\w-]+\/model$/.test(url.pathname);
@@ -155,6 +185,18 @@
         model: model(body?.model, body?.variant) });
     }
     const response = await nativeFetch(input, init);
+    // Projects deleted on the phone are hidden here too: the engine has no delete API,
+    // so the shared state carries their canonical paths and the UI never sees them.
+    if (native && response.ok && method === "GET" && hiddenProjects.size > 0
+      && /^\/(api\/)?project$/.test(url.pathname)) {
+      const list = await response.clone().json().catch(() => undefined);
+      if (Array.isArray(list)) {
+        const visible = list.filter((project) => !hiddenProjects.has(pathKey(project?.canonical || project?.worktree)));
+        if (visible.length !== list.length) {
+          return new Response(JSON.stringify(visible), { status: response.status, statusText: response.statusText, headers: response.headers });
+        }
+      }
+    }
     if (modelUpdate && response.ok) {
       if (model(body?.model)) await send("model", { sessionID: /\/session\/(ses_[\w-]+)/.exec(url.pathname)?.[1], model: model(body.model) });
     }
@@ -167,13 +209,39 @@
   window.__opencodeTelegramSync = {
     accept(next, address, apiVersion, language) {
       const previous = state;
+      // Before the first accept in a fresh document there is no baseline. Treat that as
+      // "unchanged" instead of "" so a non-empty hidden list does not force a reload loop.
+      const hiddenBefore = previous ? (previous.hiddenProjects || []).join("|") : undefined;
       state = next; target = address; version = apiVersion; locale = language;
+      hiddenProjects = new Set((next.hiddenProjects || []).map(pathKey));
+      const hiddenChanged = hiddenBefore !== undefined && hiddenBefore !== (next.hiddenProjects || []).join("|");
+      let selectedDraft;
       for (const ack of next.acknowledgements || []) {
         const request = pending.get(ack.id);
         if (!request) continue;
         clearTimeout(request.timer); pending.delete(ack.id);
         if (ack.reason) { notice(ack.reason); follow(ack.reason); request.reject(new Error(`Synchronization: ${ack.reason}`)); }
-        else request.resolve();
+        else {
+          request.resolve();
+          if (request.kind === "selection" && request.directory) selectedDraft = request.directory;
+        }
+      }
+      if (next.projectUnavailable) {
+        if (!previous?.projectUnavailable) notice("project_missing");
+        // Keep navigation available without rewriting the saved session or draft.
+        lastRoute = location.pathname + location.search;
+        return;
+      }
+      // A project picked from this page without a session opens its draft, so the page never
+      // stays behind on the project list after the phone has already switched to it.
+      const sharedSession = next.currentSession?.id;
+      if (!sharedSession && location.pathname === "/" && version === "v2") {
+        const directory = selectedDraft
+          || (previous && next.currentProject?.worktree !== previous.currentProject?.worktree ? next.currentProject?.worktree : undefined);
+        if (directory) {
+          sessionStorage.setItem("opencode-telegram-sync-reason", "stale");
+          location.replace(routeURL("/new-session", { directory }));
+        }
       }
       const reason = sessionStorage.getItem("opencode-telegram-sync-reason");
       if (reason) { sessionStorage.removeItem("opencode-telegram-sync-reason"); notice(reason); }
@@ -206,11 +274,33 @@
               }
             }
           }
-          if (target && location.pathname !== new URL(target).pathname) { follow(mobile ? "mobile" : next.busy ? "busy" : "stale"); return; }
+          const sharedSessionID = next.currentSession?.id;
+          if (version === "v2" && projectChanged && !sharedSessionID && next.currentProject?.worktree) {
+            // A project was chosen without a session: open its draft instead of the project list.
+            target = routeURL("/new-session", { directory: next.currentProject.worktree });
+          }
+          // Without a shared session there is nothing to follow: never pull the page to the list.
+          const mayFollow = Boolean(sharedSessionID) || projectChanged;
+          if (mayFollow && target && location.pathname !== new URL(target).pathname) { follow(mobile ? "mobile" : next.busy ? "busy" : "stale"); return; }
           if (changed || (mobile && projectChanged)) reloadAuthenticated();
         } finally { applying = false; }
       }
       lastRoute = location.pathname + location.search;
+      if (next.deletedSession && Date.now() - next.deletedSession.at < 20000
+        && sessionID() === next.deletedSession.id) {
+        // The phone deleted the session this page is showing.
+        location.replace(routeURL("/"));
+        return;
+      }
+      if (hiddenChanged) {
+        // The project list only refreshes on load; reload so a project deleted on the
+        // phone disappears here without waiting for the next manual navigation.
+        if (!next.currentSession?.id && version === "v2") {
+          location.replace(routeURL("/"));
+        } else {
+          reloadAuthenticated();
+        }
+      }
     },
   };
 })();

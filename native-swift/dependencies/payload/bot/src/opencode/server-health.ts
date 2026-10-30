@@ -45,11 +45,19 @@ export async function classifyFailedHealthCheck(): Promise<FailedHealthCause> {
   if (configured.kind === "unauthorized") {
     return { kind: "unauthorized" };
   }
-  if (configured.kind === "found" && !configured.serverVersion.startsWith("2.")) {
-    return { kind: "mismatch", actual: `OpenCode ${configured.serverVersion}`, otherVersion: "v1" };
-  }
 
-  return { kind: "unknown" };
+  const otherVersion = opencodeServerVersion === "v1" ? "v2" : "v1";
+  const other = await probeOpencodeServer(otherVersion);
+  // A server that answers the configured route without asking for credentials but locks
+  // the other version's route is that other version: a password-protected server locks
+  // every route. Its exact version stays unknown without the password.
+  const actual =
+    other.kind === "found"
+      ? `OpenCode ${other.serverVersion}`
+      : other.kind === "unauthorized"
+        ? "an OpenCode server"
+        : null;
+  return actual ? { kind: "mismatch", actual, otherVersion } : { kind: "unknown" };
 }
 
 /** Writes the log line for a failed health check cause; an unknown cause logs nothing. */
@@ -66,7 +74,7 @@ export function reportFailedHealthCause(cause: FailedHealthCause, mode: ProblemR
   if (cause.kind === "mismatch") {
     reportOpencodeProblem(`mismatch:${cause.actual}`, mode, () =>
       logger.error(
-        `[OpenCode] Server version mismatch: OPENCODE_SERVER_VERSION=v2, but the server at ${describeServerUrl()} is ${cause.actual} (API ${cause.otherVersion}). Only OpenCode V2 is supported; run a V2 server at this address.`,
+        `[OpenCode] Server version mismatch: OPENCODE_SERVER_VERSION=${opencodeServerVersion}, but the server at ${describeServerUrl()} is ${cause.actual} (API ${cause.otherVersion}). Set OPENCODE_SERVER_VERSION=${cause.otherVersion} and restart the bot, or run an OpenCode ${opencodeServerVersion} server at this address.`,
       ),
     );
   }

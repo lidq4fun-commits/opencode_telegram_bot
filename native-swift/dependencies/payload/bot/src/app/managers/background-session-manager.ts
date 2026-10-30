@@ -1,4 +1,4 @@
-import type { Event, Message, Session } from "@opencode-ai/sdk/v2";
+import type { Event, Message, Session } from "../../opencode/types.js";
 import { isScheduledTaskSessionIgnored } from "../services/scheduled-task-session-ignore-service.js";
 import { logger } from "../../utils/logger.js";
 

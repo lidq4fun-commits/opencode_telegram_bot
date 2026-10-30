@@ -2,6 +2,7 @@ import { InlineKeyboard, type Context } from "grammy";
 import type { AppContainer } from "../../app/bootstrap/app-container.js";
 import {
   getProjectRoot,
+  isDirectoryWritable,
   isPathWithinDirectory,
   isWithinAllowedRoot,
   isWithinProjectRoot,
@@ -14,6 +15,7 @@ import {
 import { t } from "../../i18n/index.js";
 import { alert, failure } from "./feedback.js";
 import { getProjectByWorktree } from "../../app/services/project-service.js";
+import { unhideProject } from "../../app/stores/settings-store.js";
 import { upsertSessionDirectory } from "../../app/services/session-cache-service.js";
 import { logger } from "../../utils/logger.js";
 import { replyBusyBlocked } from "../messages/busy-blocked-renderer.js";
@@ -67,6 +69,8 @@ export type OpenCallbackDeps = Pick<AppContainer, "ensureEventSubscription"> &
 
 const sessionDirectories = new Map<number, string>();
 
+export const CREATE_PROJECT_CANCEL_CALLBACK = "create_project:cancel";
+
 export function clearSessionDirectories(): void {
   sessionDirectories.clear();
 }
@@ -114,7 +118,7 @@ export async function handleOpenCallback(
 
   try {
     if (data === OPEN_CALLBACK_ROOTS) {
-      await showOpenRoots(ctx);
+      await showOpenRoots(ctx, openCancelButtonText(deps));
       return true;
     }
 
@@ -124,7 +128,7 @@ export async function handleOpenCallback(
         await alert(ctx, "open.access_denied");
         return true;
       }
-      await navigateOpenTo(ctx, navPath);
+      await navigateOpenTo(ctx, navPath, 0, openSelectButtonText(deps), openCancelButtonText(deps));
       return true;
     }
 
@@ -134,7 +138,13 @@ export async function handleOpenCallback(
         await alert(ctx, "open.access_denied");
         return true;
       }
-      await navigateOpenTo(ctx, pageInfo.path, pageInfo.page);
+      await navigateOpenTo(
+        ctx,
+        pageInfo.path,
+        pageInfo.page,
+        openSelectButtonText(deps),
+        openCancelButtonText(deps),
+      );
       return true;
     }
 
@@ -142,6 +152,10 @@ export async function handleOpenCallback(
     if (selectPath !== null) {
       if (!isWithinAllowedRoot(selectPath)) {
         await alert(ctx, "open.access_denied");
+        return true;
+      }
+      if (isCreateProjectMode(deps)) {
+        await promptCreateProjectName(ctx, selectPath, deps);
         return true;
       }
       await selectDirectory(ctx, selectPath, deps);
@@ -156,13 +170,21 @@ export async function handleOpenCallback(
   }
 }
 
-async function showOpenRoots(ctx: Context): Promise<void> {
+async function showOpenRoots(ctx: Context, cancelButtonText?: string): Promise<void> {
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText(t("open.select_root"), { reply_markup: buildOpenRootsKeyboard() });
+  await ctx.editMessageText(t("open.select_root"), {
+    reply_markup: buildOpenRootsKeyboard(cancelButtonText),
+  });
 }
 
-async function navigateOpenTo(ctx: Context, dirPath: string, page: number = 0): Promise<void> {
-  const view = await renderOpenBrowseView(dirPath, page);
+async function navigateOpenTo(
+  ctx: Context,
+  dirPath: string,
+  page: number = 0,
+  selectButtonText?: string,
+  cancelButtonText?: string,
+): Promise<void> {
+  const view = await renderOpenBrowseView(dirPath, page, selectButtonText, cancelButtonText);
 
   if ("error" in view) {
     await ctx.answerCallbackQuery({ text: view.error });
@@ -173,6 +195,72 @@ async function navigateOpenTo(ctx: Context, dirPath: string, page: number = 0): 
   await ctx.editMessageText(view.text, { reply_markup: view.keyboard });
 }
 
+function isCreateProjectMode(deps: InlineMenuDeps): boolean {
+  const state = deps.interactionManager.getSnapshot();
+  return state?.kind === "inline" && state.metadata.createProject === true;
+}
+
+function openSelectButtonText(deps: InlineMenuDeps): string | undefined {
+  return isCreateProjectMode(deps) ? t("create_project.select_here") : undefined;
+}
+
+function openCancelButtonText(deps: InlineMenuDeps): string | undefined {
+  return isCreateProjectMode(deps) ? t("create_project.cancel_browse") : undefined;
+}
+
+async function promptCreateProjectName(
+  ctx: Context,
+  parentPath: string,
+  deps: InlineMenuDeps,
+): Promise<void> {
+  if (!(await isDirectoryWritable(parentPath))) {
+    logger.info(`[CreateProject] Directory is not writable: ${parentPath}`);
+    await alert(ctx, "create_project.permission_denied");
+    return;
+  }
+
+  const displayPath = pathToDisplayPath(parentPath);
+  const message = await ctx.reply(t("create_project.prompt", { path: displayPath }), {
+    reply_markup: new InlineKeyboard().text(
+      t("create_project.cancel"),
+      CREATE_PROJECT_CANCEL_CALLBACK,
+    ),
+  });
+
+  await ctx.answerCallbackQuery();
+  await ctx.deleteMessage().catch(() => {});
+  clearOpenPathIndex();
+
+  deps.interactionManager.start({
+    kind: "custom",
+    expectedInput: "text",
+    metadata: {
+      flow: "create_project",
+      parentPath,
+      messageId: message.message_id,
+    },
+  });
+
+  logger.info(`[CreateProject] Waiting for a folder name in: ${parentPath}`);
+}
+
+export async function openProjectDirectory(
+  ctx: Context,
+  directory: string,
+  deps: OpenCallbackDeps,
+) {
+  logger.info(`[Bot] Adding project directory: ${directory}`);
+  await upsertSessionDirectory(directory, Date.now());
+  unhideProject(directory);
+
+  const projectInfo = await getProjectByWorktree(directory);
+  const selectedProjectInfo = { ...projectInfo, name: pathToDisplayPath(directory) };
+  return switchToProject(ctx, selectedProjectInfo, "open_project_selected", {
+    ...deps,
+    presentation: createProjectSwitchPresentation(deps),
+  });
+}
+
 async function selectDirectory(
   ctx: Context,
   directory: string,
@@ -181,15 +269,7 @@ async function selectDirectory(
   const displayPath = pathToDisplayPath(directory);
 
   try {
-    logger.info(`[Bot] Adding project directory: ${directory}`);
-    await upsertSessionDirectory(directory, Date.now());
-
-    const projectInfo = await getProjectByWorktree(directory);
-    const selectedProjectInfo = { ...projectInfo, name: displayPath };
-    const replyKeyboard = await switchToProject(ctx, selectedProjectInfo, "open_project_selected", {
-      ...deps,
-      presentation: createProjectSwitchPresentation(deps),
-    });
+    const replyKeyboard = await openProjectDirectory(ctx, directory, deps);
 
     await ctx.answerCallbackQuery();
     await ctx.reply(t("open.selected", { project: displayPath }), { reply_markup: replyKeyboard });

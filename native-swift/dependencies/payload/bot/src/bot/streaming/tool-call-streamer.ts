@@ -1,4 +1,6 @@
 import { logger } from "../../utils/logger.js";
+import { withTelegramDeliveryPriority } from "../telegram-send-scheduler.js";
+import { MAX_TELEGRAM_RATE_LIMIT_WAIT_MS } from "../telegram-rate-limit-cooldown.js";
 import {
   resolveStreamThrottleMs,
   type StreamThrottleMs,
@@ -566,7 +568,7 @@ export class ToolCallStreamer {
         }
 
         const retryAfterMs = getRetryAfterMs(error);
-        if (retryAfterMs === null) {
+        if (retryAfterMs === null || retryAfterMs > MAX_TELEGRAM_RATE_LIMIT_WAIT_MS) {
           this.markStreamBroken(state, error, reason);
           return false;
         }
@@ -620,7 +622,7 @@ export class ToolCallStreamer {
       }
 
       try {
-        return await operation();
+        return await withTelegramDeliveryPriority("progress", operation);
       } finally {
         this.lastTelegramOperationAt.set(sessionId, Date.now());
       }

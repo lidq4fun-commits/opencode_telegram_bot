@@ -1,7 +1,6 @@
 import type { Context } from "grammy";
 import {
   MAX_QUEUED_PROMPTS,
-  MAX_QUEUED_MEDIA_BYTES,
   promptQueue,
   type QueuedPromptInput,
 } from "../../app/managers/prompt-queue-manager.js";
@@ -16,12 +15,17 @@ import { getPromptQueueMode } from "../../app/stores/settings-store.js";
 import { t } from "../../i18n/index.js";
 import { logger } from "../../utils/logger.js";
 import { isReplyKeyboardButtonText } from "../message-patterns.js";
-import { admitPromptToInbox, startInboxPromptRun, type ProcessPromptDeps } from "./prompt.js";
+import {
+  admitPromptToInbox,
+  startInboxPromptRun,
+  type ProcessPromptDeps,
+} from "./prompt.js";
 
 // The queue helpers are called from the guard and the media handlers without
 // deps, so the dispatcher receives them once at startup instead. Until then the
 // chat counts as not busy and nothing is queued.
 let promptDeps: ProcessPromptDeps | null = null;
+
 
 export function initializePromptQueueDispatch(deps: ProcessPromptDeps): void {
   promptDeps = deps;
@@ -40,7 +44,11 @@ function isQueueablePrompt(input: IncomingPrompt): boolean {
   const normalizedText = input.text.trim();
   const hasContent =
     Boolean(normalizedText) || input.fileParts.length > 0 || input.photos.length > 0;
-  return hasContent && !normalizedText.startsWith("/") && !isReplyKeyboardButtonText(input.text);
+  return (
+    hasContent &&
+    !normalizedText.startsWith("/") &&
+    !isReplyKeyboardButtonText(input.text)
+  );
 }
 
 /**
@@ -55,8 +63,8 @@ export function canQueueMediaPrompt(ctx: Context): boolean {
   const message = ctx.message;
   return Boolean(
     isPromptQueueEnabled() &&
-    message &&
-    (message.voice || message.audio || message.photo?.length || message.document),
+      message &&
+      (message.voice || message.audio || message.photo?.length || message.document),
   );
 }
 
@@ -153,7 +161,7 @@ export async function tryEnqueuePromptIfBusy(
  */
 export async function rejectQueuedMediaBeforePreparation(
   ctx: Context,
-  mediaBytes: number | undefined,
+  _mediaBytes: number | undefined,
 ): Promise<boolean> {
   if (!isBusy() || !isPromptQueueEnabled() || !ctx.chat) {
     return false;
@@ -162,26 +170,14 @@ export async function rejectQueuedMediaBeforePreparation(
     await replyWithKeyboard(ctx, t("queue.full", { max: String(MAX_QUEUED_PROMPTS) }));
     return true;
   }
-  // Bound each upload before downloading, even when V2 stores the queued payload.
-  if (
-    typeof mediaBytes !== "number" ||
-    !Number.isSafeInteger(mediaBytes) ||
-    mediaBytes < 0 ||
-    !promptQueue.canAcceptMedia(mediaBytes)
-  ) {
-    await replyWithKeyboard(ctx, t("queue.media_limit", { maxSizeMb: formatQueuedMediaLimit() }));
-    return true;
-  }
   return false;
 }
 
-function formatQueuedMediaLimit(): string {
-  return String(MAX_QUEUED_MEDIA_BYTES / (1024 * 1024));
-}
-
-/** Reconcile the mirror; OpenCode, not the bot, delivers queued prompts. */
+/**
+ * Sends the next queued prompt once the session is idle again, echoing it in the
+ * same "external user input" format used for prompts sent from another device.
+ */
 export async function dispatchNextQueuedPrompt(): Promise<void> {
-  if (!promptDeps) return;
   const session = getCurrentSession();
   if (session) await reconcileInboxPrompts(session.id);
 }

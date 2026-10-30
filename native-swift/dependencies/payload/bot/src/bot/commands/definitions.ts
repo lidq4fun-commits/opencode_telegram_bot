@@ -33,6 +33,8 @@ const COMMAND_DEFINITIONS: BotCommandI18nDefinition[] = [
   { command: "messages", descriptionKey: "cmd.description.messages" },
   { command: "settings", descriptionKey: "cmd.description.settings" },
   { command: "projects", descriptionKey: "cmd.description.projects" },
+  { command: "delete_session", descriptionKey: "cmd.description.delete_session" },
+  { command: "delete_project", descriptionKey: "cmd.description.delete_project" },
   { command: "worktree", descriptionKey: "cmd.description.worktree" },
   { command: "task", descriptionKey: "cmd.description.task" },
   { command: "tasklist", descriptionKey: "cmd.description.tasklist" },
@@ -44,6 +46,8 @@ const COMMAND_DEFINITIONS: BotCommandI18nDefinition[] = [
   { command: "opencode_stop", descriptionKey: "cmd.description.opencode_stop" },
   { command: "reload", descriptionKey: "cmd.description.reload", serverVersion: "v2" },
   { command: "open", descriptionKey: "cmd.description.open" },
+  { command: "create_project", descriptionKey: "cmd.description.create_project" },
+  { command: "connect", descriptionKey: "cmd.description.connect" },
   { command: "ls", descriptionKey: "cmd.description.ls" },
   { command: "help", descriptionKey: "cmd.description.help" },
 ];

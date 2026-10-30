@@ -33,10 +33,6 @@ const TEST_ENV_DEFAULTS: Record<string, string> = {
 };
 
 export function ensureTestEnvironment(): void {
-  // Desktop launch settings must not leak into isolated test workers.
-  process.env.BOT_LOCALE = "en";
-  process.env.OPENCODE_TELEGRAM_DESKTOP_SYNC = "0";
-  process.env.OPENCODE_EXECUTABLE_PATH = "";
   for (const [key, value] of Object.entries(TEST_ENV_DEFAULTS)) {
     if (!process.env[key]) {
       process.env[key] = value;

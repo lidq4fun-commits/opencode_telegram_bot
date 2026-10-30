@@ -1,3 +1,4 @@
+import { ensureProjectDirectory } from "./project-directory-service.js";
 import type { Context } from "grammy";
 import type {
   ForceReply,
@@ -57,6 +58,7 @@ export async function switchToProject(
   reason: string,
   options: SwitchToProjectOptions,
 ) {
+  await ensureProjectDirectory(project.worktree);
   detachAttachedSession(reason, options);
   stopEventListening();
   options.backgroundSessionTracker.clear();

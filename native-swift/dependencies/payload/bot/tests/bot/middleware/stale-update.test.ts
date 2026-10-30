@@ -71,6 +71,22 @@ describe("staleUpdateMiddleware", () => {
     vi.useRealTimers();
   });
 
+  it("processes a fresh command while the outage notice is pending", async () => {
+    telegramOutageNoticeService.markAssistantReplyUndelivered();
+    let release!: (value: { message_id: number }) => void;
+    const sendMessage = vi.fn(
+      () =>
+        new Promise<{ message_id: number }>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const next = vi.fn().mockResolvedValue(undefined);
+    await staleUpdateMiddleware(createMessageContext(0, { sendMessage }), next);
+    expect(next).toHaveBeenCalledOnce();
+    release({ message_id: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
   it("passes through a fresh message", async () => {
     const ctx = createMessageContext(0);
     const next: NextFunction = vi.fn().mockResolvedValue(undefined);
@@ -136,6 +152,7 @@ describe("staleUpdateMiddleware", () => {
     const next: NextFunction = vi.fn().mockResolvedValue(undefined);
 
     await staleUpdateMiddleware(createMessageContext(61, { sendMessage }), next);
+    await vi.advanceTimersByTimeAsync(0);
     await staleUpdateMiddleware(createMessageContext(90, { sendMessage }), next);
 
     expect(next).not.toHaveBeenCalled();
@@ -150,6 +167,7 @@ describe("staleUpdateMiddleware", () => {
     const next: NextFunction = vi.fn().mockResolvedValue(undefined);
 
     await staleUpdateMiddleware(createMessageContext(61, { sendMessage }), next);
+    await vi.advanceTimersByTimeAsync(0);
     await staleUpdateMiddleware(createMessageContext(62, { sendMessage }), next);
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -160,8 +178,10 @@ describe("staleUpdateMiddleware", () => {
     const next: NextFunction = vi.fn().mockResolvedValue(undefined);
 
     await staleUpdateMiddleware(createMessageContext(61, { sendMessage }), next);
+    await vi.advanceTimersByTimeAsync(0);
     vi.setSystemTime(NOW_MS + 61_000);
     await staleUpdateMiddleware(createMessageContext(61, { sendMessage }), next);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });

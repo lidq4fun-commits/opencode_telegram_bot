@@ -89,12 +89,12 @@ function getOptionalBooleanEnvVar(key: string, defaultValue: boolean): boolean {
 export type OpencodeServerVersion = "v1" | "v2";
 
 const DEFAULT_OPENCODE_API_URLS: Record<OpencodeServerVersion, string> = {
-  v1: "http://127.0.0.1:49374",
+  v1: "http://localhost:4096",
   v2: "http://127.0.0.1:49374",
 };
 
-export function parseOpencodeServerVersion(value: string): OpencodeServerVersion {
-  const normalized = value.trim().toLowerCase();
+function getOptionalOpencodeServerVersionEnvVar(key: string): OpencodeServerVersion {
+  const normalized = getEnvVar(key, false).trim().toLowerCase();
   if (normalized && normalized !== "v2") {
     throw new Error("Only OpenCode V2 is supported. Set OPENCODE_SERVER_VERSION=v2.");
   }
@@ -128,10 +128,14 @@ export function parseInitialSettingsPreset(): Record<string, unknown> {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error("INITIAL_SETTINGS_PRESET contains invalid JSON. Fix or unset the variable.");
+    throw new Error(
+      "INITIAL_SETTINGS_PRESET contains invalid JSON. Fix or unset the variable.",
+    );
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("INITIAL_SETTINGS_PRESET must be a JSON object.");
+    throw new Error(
+      "INITIAL_SETTINGS_PRESET must be a JSON object.",
+    );
   }
   return parsed as Record<string, unknown>;
 }
@@ -212,9 +216,7 @@ export function buildTelegramConfig(): {
   };
 }
 
-const opencodeServerVersion = parseOpencodeServerVersion(
-  getEnvVar("OPENCODE_SERVER_VERSION", false),
-);
+const opencodeServerVersion = getOptionalOpencodeServerVersionEnvVar("OPENCODE_SERVER_VERSION");
 
 export const config = {
   telegram: buildTelegramConfig(),
@@ -225,6 +227,8 @@ export const config = {
     username: getEnvVar("OPENCODE_SERVER_USERNAME", false) || "opencode",
     password: getEnvVar("OPENCODE_SERVER_PASSWORD", false),
     autoRestartEnabled: getOptionalBooleanEnvVar("OPENCODE_AUTO_RESTART_ENABLED", false),
+    // The desktop launcher owns the local OpenCode service: the Bot must never spawn a second one.
+    managedByDesktop: getEnvVar("OPENCODE_MANAGED_BY_DESKTOP", false) === "1",
     monitorIntervalSec: getOptionalPositiveIntEnvVar("OPENCODE_MONITOR_INTERVAL_SEC", 300),
     model: {
       provider: getEnvVar("OPENCODE_MODEL_PROVIDER", true), // Required
@@ -289,7 +293,8 @@ export const config = {
           : provider === "edge"
             ? "en-US-EmmaMultilingualNeural"
             : "alloy";
-    const defaultModel = provider === "elevenlabs" ? "eleven_flash_v2_5" : "gpt-4o-mini-tts";
+    const defaultModel =
+      provider === "elevenlabs" ? "eleven_flash_v2_5" : "gpt-4o-mini-tts";
     return {
       apiUrl: getEnvVar("TTS_API_URL", false),
       apiKey: getEnvVar("TTS_API_KEY", false),

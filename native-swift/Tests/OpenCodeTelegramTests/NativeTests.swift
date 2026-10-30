@@ -81,6 +81,36 @@ final class NativeTests: XCTestCase {
         var settings = Settings()
         settings.executable = "/custom/selected/opencode"
         XCTAssertEqual(Runtime.environment(settings)["PATH"]?.components(separatedBy: ":").first, "/custom/selected")
+        XCTAssertTrue(Runtime.environment(settings)["PATH"]?.components(separatedBy: ":").contains(Runtime.resources.appendingPathComponent("dependencies/tg").path) == true)
+    }
+    func testBundledToolsShellPathIsIndependentAndIdempotent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Tools ' test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let tg = root.appendingPathComponent("tg")
+        try Data("fixture".utf8).write(to: tg)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tg.path)
+        let begin = "# >>> OpenCodeTelegram bundled tools >>>"
+        let end = "# <<< OpenCodeTelegram bundled tools <<<"
+        let original = "# user configuration\nexport PATH=/usr/bin:/bin\n"
+        let engine = URL(fileURLWithPath: "/custom/engine/opencode")
+        let withEngine = try EngineShellPath.content(original, executable: engine)
+        let tools = try EngineShellPath.content(withEngine, executable: tg, begin: begin, end: end)
+        XCTAssertEqual(try EngineShellPath.content(tools, executable: tg, begin: begin, end: end), tools)
+        let updated = try EngineShellPath.content(tools, executable: URL(fileURLWithPath: "/new/engine/opencode"))
+        XCTAssertTrue(updated.hasPrefix(original))
+        XCTAssertEqual(updated.components(separatedBy: begin).count, 2)
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", "-c", updated + "command -v tg"]
+        process.standardOutput = output
+        try process.run()
+        let result = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(result.trimmingCharacters(in: .whitespacesAndNewlines), tg.path)
+        XCTAssertThrowsError(try EngineShellPath.content(begin, executable: tg, begin: begin, end: end))
     }
     @MainActor func testOfflineInstallerCopiesExternalDependenciesAndPreservesUserData() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -88,7 +118,7 @@ final class NativeTests: XCTestCase {
         let source = root.appendingPathComponent("media/OpenCodeTelegram.app")
         let target = root.appendingPathComponent("installation/OpenCodeTelegram.app")
         let dependencies = Runtime.dependencyRoot(for: source)
-        for name in ["runtime/bin/node", "bot/dist/cli.js", "dependencies/opencode/v2/opencode", "dependency-sources.json"] {
+        for name in ["runtime/bin/node", "bot/dist/cli.js", "dependencies/opencode/v2/opencode", "dependencies/tg/tg", "dependency-sources.json"] {
             let file = dependencies.appendingPathComponent(name)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data("offline fixture".utf8).write(to: file)
@@ -100,14 +130,15 @@ final class NativeTests: XCTestCase {
         try await InstallerModel.copyApplication(source, to: target) { _ in }
         let installed = Runtime.dependencyRoot(for: target)
         XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent("dependencies/opencode/v2/opencode")), Data("offline fixture".utf8))
+        XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent("dependencies/tg/tg")), Data("offline fixture".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: target.appendingPathComponent("Contents/Resources/dependencies").path))
         XCTAssertEqual(try Data(contentsOf: data), Data("keep credentials".utf8))
     }
     @MainActor func testWebSidebarEntryFollowsOverviewWithoutChangingPageIdentity() {
-        XCTAssertEqual(AppModel.sidebarPageOrder, [0, 6, 1, 2, 3, 4, 5, 7])
+        XCTAssertEqual(AppModel.sidebarPageOrder, [6, 0, 8, 1, 2, 3, 4, 5, 7])
         let model = AppModel(loadSettings: false)
         model.settings.locale = "zh"
-        XCTAssertEqual(model.pages[AppModel.sidebarPageOrder[1]], "OpenCode 网页端")
+        XCTAssertEqual(model.pages[AppModel.sidebarPageOrder[0]], "OpenCode 网页端")
         XCTAssertEqual(model.pages[1], "机器人绑定")
         XCTAssertEqual(Set(AppModel.sidebarPageOrder), Set(model.pages.indices))
         model.settings.locale = "en"

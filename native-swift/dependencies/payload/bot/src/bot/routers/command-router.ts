@@ -1,3 +1,4 @@
+import { safeBackgroundTask } from "../../utils/safe-background-task.js";
 import type { Bot, Context, NextFunction } from "grammy";
 import type { AppContainer } from "../../app/bootstrap/app-container.js";
 import { config } from "../../config.js";
@@ -6,8 +7,12 @@ import { opencodeStartCommand } from "../commands/opencode-start-command.js";
 import { opencodeStopCommand } from "../commands/opencode-stop-command.js";
 import { reloadCommand } from "../commands/reload-command.js";
 import { projectsCommand } from "../commands/projects-command.js";
+import { deleteSessionCommand } from "../commands/delete-session-command.js";
+import { deleteProjectCommand } from "../commands/delete-project-command.js";
 import { worktreeCommand } from "../commands/worktree-command.js";
 import { openCommand } from "../commands/open-command.js";
+import { createProjectCommand } from "../commands/create-project-command.js";
+import { connectCommand } from "../commands/connect-command.js";
 import { lsCommand } from "../commands/ls-command.js";
 import { sessionsCommand } from "../commands/sessions-command.js";
 import { recentCommand } from "../commands/recent-command.js";
@@ -41,6 +46,7 @@ interface CommandRouterDeps {
 }
 
 let commandsInitialized = false;
+let commandsInitializing = false;
 export async function ensureCommandsInitialized(
   ctx: Context,
   next: NextFunction,
@@ -57,18 +63,21 @@ export async function ensureCommandsInitialized(
     return;
   }
 
-  try {
-    await ctx.api.setMyCommands([...BOT_COMMANDS, ...localCommandRegistry.definitions()], {
-      scope: {
-        type: "chat",
-        chat_id: ctx.chat.id,
+  if (!commandsInitializing) {
+    commandsInitializing = true;
+    safeBackgroundTask({
+      taskName: "bot.initializeCommands",
+      task: async () => {
+        try {
+          await ctx.api.setMyCommands([...BOT_COMMANDS, ...localCommandRegistry.definitions()], {
+            scope: { type: "chat", chat_id: ctx.chat!.id },
+          });
+          commandsInitialized = true;
+        } finally {
+          commandsInitializing = false;
+        }
       },
     });
-
-    commandsInitialized = true;
-    logger.debug(`[Bot] Commands initialized for authorized user (chat_id=${ctx.chat.id})`);
-  } catch (err) {
-    logger.error("[Bot] Failed to set commands:", err);
   }
 
   await next();
@@ -95,8 +104,12 @@ export function registerCommandRouter(bot: Bot<Context>, deps: CommandRouterDeps
     bot.command("reload", (ctx) => reloadCommand(ctx, container));
   }
   bot.command("projects", (ctx) => projectsCommand(ctx, container));
+  bot.command("delete_session", (ctx) => deleteSessionCommand(ctx, container));
+  bot.command("delete_project", (ctx) => deleteProjectCommand(ctx, container));
   bot.command("worktree", (ctx) => worktreeCommand(ctx, container));
   bot.command("open", (ctx) => openCommand(ctx, container));
+  bot.command("create_project", (ctx) => createProjectCommand(ctx, container));
+  bot.command("connect", (ctx) => connectCommand(ctx, container));
   bot.command("ls", (ctx) => lsCommand(ctx, container));
   bot.command("sessions", (ctx) => sessionsCommand(ctx, container));
   bot.command("recent", (ctx) => recentCommand(ctx, container));
@@ -125,9 +138,16 @@ export function registerCommandRouter(bot: Bot<Context>, deps: CommandRouterDeps
 
 function localCommandReply(result: LocalCommandResult): string {
   switch (result.kind) {
-    case "success": return result.text;
-    case "empty": return t("local_command.empty_output");
-    case "timeout": return t("local_command.timeout");
-    case "failed": return t("local_command.failed", { exitCode: result.exitCode ?? "unknown", stderr: result.stderr });
+    case "success":
+      return result.text;
+    case "empty":
+      return t("local_command.empty_output");
+    case "timeout":
+      return t("local_command.timeout");
+    case "failed":
+      return t("local_command.failed", {
+        exitCode: result.exitCode ?? "unknown",
+        stderr: result.stderr,
+      });
   }
 }

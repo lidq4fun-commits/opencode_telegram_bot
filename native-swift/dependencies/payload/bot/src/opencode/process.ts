@@ -148,9 +148,9 @@ export function parseOpencodeVersionOutput(stdout: string): string | null {
 }
 
 /** OpenCode 2.x serves the V2 API; earlier releases serve V1. */
-export function getOpencodeApiVersion(version: string): OpencodeServerVersion | null {
+export function getOpencodeApiVersion(version: string): OpencodeServerVersion {
   const major = Number.parseInt(version, 10);
-  return major === 2 ? "v2" : null;
+  return major >= 2 ? "v2" : "v1";
 }
 
 /** Version of the local `opencode` executable, or null when it cannot be read. */
